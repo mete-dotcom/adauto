@@ -1,264 +1,479 @@
-"""adauto CLI — multi-platform ad automation."""
-import os
-import sys
+"""adauto CLI — multi-platform developer marketing automation."""
+from __future__ import annotations
+
 import json
+import sys
 import time
 from pathlib import Path
 
 import click
 
 from . import __version__
-from .db import init_db, get_stats, get_queued
-from .config import load_campaign, list_campaigns, CAMPAIGNS_DIR, Campaign
-from .generator import generate_batch
-from .scheduler import due_platforms, record_run
+from .db import (
+    init_db, get_stats, get_pending_approval, get_approved,
+    approve_post, skip_post, update_post_body,
+)
+from .config import load_campaign, list_campaigns, CAMPAIGNS_DIR
+from .server import DEFAULT_PORT, DEFAULT_IDLE_TIMEOUT
 
 
 @click.group()
 @click.version_option(__version__)
 def cli():
-    """adauto — automated developer marketing for multiple platforms."""
+    """adauto — automated developer marketing with human approval."""
     init_db()
 
 
-# ---------------------------------------------------------------------------
-# adauto init
-# ---------------------------------------------------------------------------
+# ── adauto serve ──────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--port", "-p", default=DEFAULT_PORT, show_default=True)
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--idle-timeout", default=DEFAULT_IDLE_TIMEOUT, show_default=True,
+              help="Auto-shutdown after N idle seconds (OS service restarts)")
+@click.option("--ds-url", default="http://localhost:8765", show_default=True,
+              help="deepstrain URL for content generation")
+@click.option("--no-mdns", is_flag=True, default=False,
+              help="Disable mDNS broadcasting")
+def serve(port, host, idle_timeout, ds_url, no_mdns):
+    """Start the adauto HTTP server (GET /, /exec, /eval, /approve)."""
+    from .server import run_server
+
+    click.echo(f"[adauto] v{__version__}")
+    click.echo(f"[adauto] HTTP server: http://{host}:{port}/")
+    click.echo(f"[adauto] deepstrain : {ds_url}")
+    click.echo(f"[adauto] idle timeout: {idle_timeout}s")
+
+    _beacon = None
+    if not no_mdns:
+        try:
+            from .discover import start_beacon
+            _beacon = start_beacon(port)
+            click.echo(f"[adauto] mDNS: adauto.local:{port}")
+        except Exception:
+            pass
+
+    run_server(host=host, port=port, idle_timeout=idle_timeout, ds_url=ds_url)
+
+
+# ── adauto service ────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("action", type=click.Choice(
+    ["install", "uninstall", "start", "stop", "status"], case_sensitive=False
+))
+def service(action):
+    """Manage adauto OS service (auto-starts on boot).
+
+    \b
+    adauto service install   — register as OS service
+    adauto service start     — start now
+    adauto service stop      — stop
+    adauto service status    — check if running
+    adauto service uninstall — remove
+    """
+    from .service import service_cmd
+    service_cmd(action.lower())
+
+
+# ── adauto init ───────────────────────────────────────────────────────────────
+
 @cli.command()
 def init():
-    """Initialize adauto database and config directories."""
+    """Initialize adauto config directories and database."""
     from .config import CONFIG_DIR
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CAMPAIGNS_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
     click.echo(f"[adauto] initialized at {CONFIG_DIR}")
-    click.echo(f"[adauto] drop campaign TOML files in: {CAMPAIGNS_DIR}")
+    click.echo(f"[adauto] campaign configs: {CAMPAIGNS_DIR}")
+    click.echo("[adauto] next: copy a campaign TOML (see campaigns/ in repo)")
 
 
-# ---------------------------------------------------------------------------
-# adauto campaigns
-# ---------------------------------------------------------------------------
+# ── adauto campaigns ──────────────────────────────────────────────────────────
+
 @cli.command()
 def campaigns():
-    """List available campaigns."""
+    """List configured campaigns."""
     names = list_campaigns()
     if not names:
-        click.echo("No campaigns found. Add .toml files to ~/.adauto/campaigns/")
+        click.echo(f"No campaigns found. Add .toml files to {CAMPAIGNS_DIR}")
         return
     for n in names:
         camp = load_campaign(n)
-        status = "enabled" if camp and camp.enabled else "disabled"
-        platforms = ", ".join(p.name for p in camp.platforms) if camp else "?"
-        click.echo(f"  {n:20s}  [{status}]  platforms: {platforms}")
+        status = "✓" if (camp and camp.enabled) else "✗"
+        plats  = ", ".join(p.name for p in camp.platforms) if camp else "?"
+        click.echo(f"  {status}  {n:20s}  [{plats}]")
 
 
-# ---------------------------------------------------------------------------
-# adauto generate
-# ---------------------------------------------------------------------------
-@cli.command()
-@click.argument("campaign_name")
-@click.option("--platform", "-p", default=None,
-              help="Platform to generate for (reddit/devto/twitter). Default: all.")
-@click.option("--count", "-n", default=3, show_default=True,
-              help="Number of posts to generate per platform.")
-@click.option("--post-type", default=None,
-              help="Override post type (showcase/tutorial/question/update).")
-@click.option("--output", "-o", type=click.Path(), default=None,
-              help="Save generated posts to JSON file.")
-def generate(campaign_name, platform, count, post_type, output):
-    """Generate posts for a campaign using deepstrain."""
-    camp = load_campaign(campaign_name)
-    if not camp:
-        click.echo(f"Campaign not found: {campaign_name}", err=True)
-        sys.exit(1)
+# ── adauto generate ───────────────────────────────────────────────────────────
 
-    platforms = [p for p in camp.platforms if p.enabled]
-    if platform:
-        platforms = [p for p in platforms if p.name == platform]
-
-    if not platforms:
-        click.echo("No enabled platforms found.", err=True)
-        sys.exit(1)
-
-    all_posts = []
-    for plat in platforms:
-        types = [post_type] if post_type else plat.post_types
-        click.echo(f"\n[generate] {campaign_name}/{plat.name} — {count} posts...")
-        posts = generate_batch(camp, plat.name, count=count,
-                               post_types=types,
-                               ds_url=camp.deepstrain_url)
-        for p in posts:
-            click.echo(f"  [{p['post_type']}] {p.get('title', '')[:60] or p.get('body','')[:60]}")
-        all_posts.extend(posts)
-
-    if output:
-        Path(output).write_text(json.dumps(all_posts, indent=2, ensure_ascii=False))
-        click.echo(f"\n[generate] saved {len(all_posts)} posts to {output}")
-    else:
-        click.echo(f"\n[generate] {len(all_posts)} posts generated")
-        click.echo("Use --output to save, or `adauto post` to publish")
-
-
-# ---------------------------------------------------------------------------
-# adauto post
-# ---------------------------------------------------------------------------
 @cli.command()
 @click.argument("campaign_name")
 @click.option("--platform", "-p", default=None)
-@click.option("--from-file", "-f", type=click.Path(exists=True), default=None,
-              help="Use pre-generated posts JSON instead of generating new ones.")
-@click.option("--dry-run", is_flag=True, default=False,
-              help="Print what would be posted without actually posting.")
-def post(campaign_name, platform, from_file, dry_run):
-    """Generate and post content for a campaign."""
+@click.option("--count", "-n", default=3, show_default=True)
+@click.option("--post-type", "-t", default=None)
+@click.option("--ds-url", default="http://localhost:8765")
+def generate(campaign_name, platform, count, post_type, ds_url):
+    """Generate posts and queue for approval (they do NOT post automatically)."""
     camp = load_campaign(campaign_name)
     if not camp:
-        click.echo(f"Campaign not found: {campaign_name}", err=True)
-        sys.exit(1)
+        click.echo(f"Campaign not found: {campaign_name}", err=True); sys.exit(1)
 
     platforms = [p for p in camp.platforms if p.enabled]
     if platform:
         platforms = [p for p in platforms if p.name == platform]
+    if not platforms:
+        click.echo("No enabled platforms."); sys.exit(1)
 
+    from .generator import generate_post
+    from .db import add_post
+    from .analytics import best_post_type
+
+    total = 0
     for plat in platforms:
-        if from_file:
-            import json as _json
-            all_posts = _json.loads(Path(from_file).read_text())
-            plat_posts = [p for p in all_posts if p.get("platform") == plat.name]
-        else:
-            click.echo(f"[post] generating posts for {plat.name}...")
-            plat_posts = generate_batch(camp, plat.name, count=len(plat.subreddits or [1]),
-                                        ds_url=camp.deepstrain_url)
+        for i in range(count):
+            ptype = post_type or best_post_type(camp.name, plat.name,
+                                                fallback=plat.post_types[i % len(plat.post_types)])
+            click.echo(f"[generate] {plat.name}/{ptype} ({i+1}/{count})...", nl=False)
+            t0 = time.monotonic()
+            post = generate_post(camp, plat.name, ptype, ds_url=ds_url or camp.deepstrain_url)
+            elapsed = time.monotonic() - t0
+            if post:
+                pid = add_post(
+                    campaign_name=campaign_name,
+                    platform=plat.name,
+                    post_type=ptype,
+                    title=post.get("title", ""),
+                    body=post.get("body", ""),
+                )
+                click.echo(f" ✓ #{pid} ({elapsed:.1f}s, {len(post.get('body',''))} chars)")
+                total += 1
+            else:
+                click.echo(f" ✗ failed")
 
-        if not plat_posts:
-            click.echo(f"[post] no posts for {plat.name}")
+    click.echo(f"\n[generate] {total} post(s) queued for review.")
+    click.echo("Run `adauto review` to approve/skip before posting.")
+
+
+# ── adauto review ─────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--campaign", "-c", default=None)
+@click.option("--platform", "-p", default=None)
+@click.option("--approve-all", is_flag=True, default=False,
+              help="Approve all pending posts without interactive review")
+def review(campaign, platform, approve_all):
+    """Review pending posts and approve/skip each one before posting.
+
+    This is the mandatory approval step — nothing posts without your OK.
+    """
+    posts = get_pending_approval(campaign_name=campaign, platform=platform)
+    if not posts:
+        click.echo("No posts pending approval.")
+        return
+
+    click.echo(f"\n{'='*60}")
+    click.echo(f"  {len(posts)} post(s) pending approval")
+    click.echo(f"{'='*60}\n")
+
+    if approve_all:
+        for p in posts:
+            approve_post(p["id"])
+        click.echo(f"✓ Approved all {len(posts)} posts.")
+        click.echo("Run `adauto post` to publish approved posts.")
+        return
+
+    approved_count = 0
+    skipped_count  = 0
+
+    for i, p in enumerate(posts, 1):
+        click.echo(f"[{i}/{len(posts)}] Campaign: {p['campaign_name']}  Platform: {p['platform']}  Type: {p['post_type']}")
+        click.echo(f"ID: #{p['id']}")
+        if p.get("title"):
+            click.echo(f"\nTITLE:\n{p['title']}")
+        click.echo(f"\nBODY ({len(p.get('body',''))} chars):")
+        click.echo("─" * 50)
+        body = p.get("body", "")
+        # Show first 800 chars
+        click.echo(body[:800])
+        if len(body) > 800:
+            click.echo(f"\n... [{len(body)-800} more chars hidden]")
+        click.echo("─" * 50)
+
+        while True:
+            choice = click.prompt(
+                "\n[a]pprove  [s]kip  [e]dit  [v]iew full  [q]uit review",
+                default="a",
+            ).strip().lower()
+
+            if choice in ("a", "approve"):
+                approve_post(p["id"])
+                click.echo("✓ Approved")
+                approved_count += 1
+                break
+            elif choice in ("s", "skip"):
+                skip_post(p["id"])
+                click.echo("✗ Skipped")
+                skipped_count += 1
+                break
+            elif choice in ("v", "view"):
+                click.echo("\n" + "="*60)
+                click.echo(body)
+                click.echo("="*60)
+            elif choice in ("e", "edit"):
+                new_title = click.prompt("New title (enter to keep)", default=p.get("title",""))
+                click.echo("Paste new body (end with a line containing only '---'):")
+                lines = []
+                while True:
+                    ln = input()
+                    if ln == "---":
+                        break
+                    lines.append(ln)
+                new_body = "\n".join(lines) if lines else body
+                update_post_body(p["id"], new_title, new_body)
+                approve_post(p["id"])
+                click.echo("✓ Edited + Approved")
+                approved_count += 1
+                break
+            elif choice in ("q", "quit"):
+                click.echo(f"\nReview paused. {approved_count} approved, {skipped_count} skipped.")
+                return
+            else:
+                click.echo("Invalid choice. Use a/s/e/v/q")
+
+        click.echo()
+
+    click.echo(f"\n{'='*60}")
+    click.echo(f"Review complete: {approved_count} approved, {skipped_count} skipped")
+    if approved_count > 0:
+        click.echo("Run `adauto post` to publish approved posts.")
+    click.echo("="*60)
+
+
+# ── adauto post ───────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("campaign_name")
+@click.option("--platform", "-p", default=None)
+@click.option("--dry-run", is_flag=True, default=False)
+def post(campaign_name, platform, dry_run):
+    """Publish all APPROVED posts for a campaign.
+
+    Only posts that have been approved via `adauto review` will be published.
+    """
+    camp = load_campaign(campaign_name)
+    if not camp:
+        click.echo(f"Campaign not found: {campaign_name}", err=True); sys.exit(1)
+
+    approved = get_approved(platform=platform)
+    camp_approved = [p for p in approved if p["campaign_name"] == campaign_name]
+
+    if not camp_approved:
+        click.echo(f"No approved posts for '{campaign_name}'. Run `adauto generate` then `adauto review`.")
+        return
+
+    if dry_run:
+        click.echo(f"[dry-run] Would publish {len(camp_approved)} post(s):")
+        for p in camp_approved:
+            click.echo(f"  #{p['id']} [{p['platform']}] {p['post_type']} — {(p.get('title') or p.get('body',''))[:60]}")
+        return
+
+    click.echo(f"Publishing {len(camp_approved)} approved post(s)...")
+
+    from .scheduler import record_run
+
+    by_platform: dict = {}
+    for p in camp_approved:
+        by_platform.setdefault(p["platform"], []).append(p)
+
+    for plat_name, posts in by_platform.items():
+        plat = camp.get_platform(plat_name)
+        if not plat:
+            continue
+        try:
+            if plat_name == "reddit":
+                from .platforms.reddit import RedditPoster
+                poster = RedditPoster()
+                for p in posts:
+                    subs = plat.subreddits or ["programming"]
+                    url = poster.post(camp, plat, p, subreddit=subs[0])
+                    click.echo(f"  #{p['id']} → {url or 'FAILED'}")
+            elif plat_name == "devto":
+                from .platforms.devto import DevtoPoster
+                poster = DevtoPoster()
+                poster.run_campaign(camp, posts)
+            elif plat_name == "twitter":
+                from .platforms.twitter import TwitterPoster
+                poster = TwitterPoster()
+                poster.run_campaign(camp, posts)
+        except RuntimeError as e:
+            click.echo(f"  [{plat_name}] skipped — {e}")
+
+        record_run(campaign_name, plat_name)
+
+
+# ── adauto run (full automated loop) ─────────────────────────────────────────
+
+@cli.command()
+@click.option("--campaign", "-c", default=None)
+@click.option("--platform", "-p", default=None)
+@click.option("--ds-url", default="http://localhost:8765")
+@click.option("--dry-run", is_flag=True)
+@click.option("--once", is_flag=True, help="Generate + queue, then stop (no posting)")
+def run(campaign, platform, ds_url, dry_run, once):
+    """Full automation loop: generate → print for review → (if approved) post.
+
+    Posts are NEVER published automatically without approval.
+    Use --once to generate and queue posts, then review with `adauto review`.
+    """
+    names = [campaign] if campaign else list_campaigns()
+    from .scheduler import due_platforms
+    from .generator import generate_batch
+    from .db import add_post
+
+    for name in names:
+        camp = load_campaign(name)
+        if not camp or not camp.enabled:
+            continue
+        due = due_platforms(camp)
+        if not due:
+            click.echo(f"[run] {name} — nothing due")
             continue
 
-        _run_platform(camp, plat, plat_posts, dry_run)
-        if not dry_run:
-            record_run(camp.name, plat.name)
-
-
-def _run_platform(camp, plat, posts, dry_run):
-    name = plat.name
-    try:
-        if name == "reddit":
-            from .platforms.reddit import RedditPoster
-            poster = RedditPoster()
-            poster.run_campaign(camp, posts, dry_run=dry_run)
-        elif name == "devto":
-            from .platforms.devto import DevtoPoster
-            poster = DevtoPoster()
-            poster.run_campaign(camp, posts, dry_run=dry_run)
-        elif name == "twitter":
-            from .platforms.twitter import TwitterPoster
-            poster = TwitterPoster()
-            poster.run_campaign(camp, posts, dry_run=dry_run)
-        else:
-            click.echo(f"[post] unknown platform: {name}")
-    except RuntimeError as e:
-        click.echo(f"[{name}] skipped — {e}")
-
-
-# ---------------------------------------------------------------------------
-# adauto run  (scheduler loop — runs due campaigns)
-# ---------------------------------------------------------------------------
-@cli.command()
-@click.option("--once", is_flag=True, default=False,
-              help="Run due campaigns once and exit (default: loop every hour).")
-@click.option("--dry-run", is_flag=True, default=False)
-@click.option("--campaign", "-c", default=None,
-              help="Limit to one campaign.")
-def run(once, dry_run, campaign):
-    """Run the scheduler — posts to due platforms automatically."""
-    while True:
-        names = [campaign] if campaign else list_campaigns()
-        for name in names:
-            camp = load_campaign(name)
-            if not camp or not camp.enabled:
+        for plat in due:
+            if platform and plat.name != platform:
                 continue
-            due = due_platforms(camp)
-            if not due:
-                click.echo(f"[run] {name} — nothing due")
-                continue
-            for plat in due:
-                click.echo(f"[run] {name}/{plat.name} is due — generating...")
-                posts = generate_batch(camp, plat.name,
-                                       count=max(1, len(plat.subreddits or [1])),
-                                       ds_url=camp.deepstrain_url)
-                _run_platform(camp, plat, posts, dry_run)
-                if not dry_run:
-                    record_run(camp.name, plat.name)
+            click.echo(f"[run] {name}/{plat.name} — generating {len(plat.subreddits or [1])} posts...")
+            posts = generate_batch(camp, plat.name,
+                                   count=max(1, len(plat.subreddits or [1])),
+                                   ds_url=ds_url or camp.deepstrain_url)
+            for p in posts:
+                pid = add_post(
+                    campaign_name=name,
+                    platform=plat.name,
+                    post_type=p["post_type"],
+                    title=p.get("title", ""),
+                    body=p.get("body", ""),
+                )
+                click.echo(f"  ✓ #{pid} [{plat.name}] {p['post_type']}: {(p.get('title') or '')[:50]}")
 
-        if once:
-            break
-        click.echo("[run] sleeping 60 min...")
-        time.sleep(3600)
+    count = len(get_pending_approval())
+    click.echo(f"\n{count} post(s) queued. Run `adauto review` to approve before posting.")
 
 
-# ---------------------------------------------------------------------------
-# adauto status
-# ---------------------------------------------------------------------------
+# ── adauto check-engagement ───────────────────────────────────────────────────
+
+@cli.command("check-engagement")
+def check_engagement():
+    """Poll platforms for upvotes/comments on recent posts and update learning data."""
+    from .analytics import check_engagement_all
+    click.echo("[engagement] polling platforms...")
+    updated = check_engagement_all()
+    click.echo(f"[engagement] updated {updated} posts")
+    _show_scores()
+
+
+def _show_scores():
+    from .analytics import score_styles
+    scores = score_styles()
+    if not scores:
+        return
+    click.echo("\n=== Engagement Scores (learning) ===")
+    click.echo(f"{'Platform':12} {'PostType':12} {'Posts':6} {'Avg↑':6} {'Avg💬':6} {'Score':7}")
+    click.echo("─" * 55)
+    for s in scores[:10]:
+        click.echo(
+            f"{s['platform']:12} {s['post_type']:12} {s['n_posts']:6d} "
+            f"{s['avg_upvotes']:6.1f} {s['avg_comments']:6.1f} {s['total_score']:7.0f}"
+        )
+
+
+# ── adauto status ─────────────────────────────────────────────────────────────
+
 @cli.command()
 def status():
-    """Show posting statistics."""
+    """Show overall campaign statistics."""
     stats = get_stats()
-    if not stats:
-        click.echo("No posts yet.")
-        return
+    pending = get_pending_approval()
+    approved = get_approved()
+
     click.echo("\n=== adauto status ===")
-    for platform, statuses in stats.items():
-        total = sum(statuses.values())
-        click.echo(f"\n{platform}:")
-        for s, n in sorted(statuses.items()):
-            bar = "█" * min(n, 20)
-            click.echo(f"  {s:10s} {n:4d}  {bar}")
-        click.echo(f"  {'TOTAL':10s} {total:4d}")
 
-    queued = get_queued()
-    if queued:
-        click.echo(f"\n{len(queued)} post(s) in queue:")
-        for q in queued[:5]:
-            click.echo(f"  #{q['id']} [{q['platform']}] {q['post_type']} — {(q['title'] or '')[:50]}")
+    if not stats and not pending and not approved:
+        click.echo("No data yet. Run `adauto generate` to start.")
+        return
+
+    if pending:
+        click.echo(f"\n⏳ {len(pending)} post(s) PENDING APPROVAL — run `adauto review`")
+    if approved:
+        click.echo(f"✅ {len(approved)} post(s) APPROVED, ready to publish — run `adauto post <campaign>`")
+
+    if stats:
+        click.echo()
+        for platform, statuses in stats.items():
+            total = sum(statuses.values())
+            parts = "  ".join(f"{s}:{n}" for s, n in sorted(statuses.items()))
+            click.echo(f"  {platform:12} [{parts}]  total={total}")
+
+    _show_scores()
 
 
-# ---------------------------------------------------------------------------
-# adauto benchmark
-# ---------------------------------------------------------------------------
+# ── adauto beacon ─────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--discover", is_flag=True, help="Discover other adauto instances on LAN")
+@click.option("--timeout", default=3.0)
+def beacon(discover, timeout):
+    """Broadcast or discover adauto on the local network."""
+    if discover:
+        from .discover import discover as _discover
+        click.echo(f"[beacon] scanning ({timeout}s)...")
+        instances = _discover(timeout=timeout)
+        if instances:
+            for inst in instances:
+                click.echo(f"  {inst['name']}: {inst['host']}:{inst['port']}")
+        else:
+            click.echo("  No adauto instances found on LAN")
+    else:
+        click.echo("To broadcast: start with `adauto serve` (mDNS is automatic)")
+
+
+# ── adauto benchmark ──────────────────────────────────────────────────────────
+
 @cli.command()
 @click.argument("campaign_name")
 @click.option("--platform", "-p", default="reddit")
 @click.option("--count", "-n", default=3)
-def benchmark(campaign_name, platform, count):
-    """Benchmark deepstrain: measure token savings and generation speed."""
-    import time as _t
-
+@click.option("--ds-url", default="http://localhost:8765")
+def benchmark(campaign_name, platform, count, ds_url):
+    """Benchmark deepstrain: generation speed and content quality."""
     camp = load_campaign(campaign_name)
     if not camp:
-        click.echo(f"Campaign not found: {campaign_name}", err=True)
-        sys.exit(1)
+        click.echo(f"Campaign not found: {campaign_name}", err=True); sys.exit(1)
 
-    click.echo(f"\n[benchmark] {campaign_name} / {platform} — {count} posts")
-    click.echo(f"[benchmark] deepstrain URL: {camp.deepstrain_url}")
+    from .generator import generate_batch
+    from .analytics import best_post_type
 
-    t0 = _t.monotonic()
-    posts = generate_batch(camp, platform, count=count, ds_url=camp.deepstrain_url)
-    elapsed = _t.monotonic() - t0
+    click.echo(f"\n[benchmark] {campaign_name}/{platform} × {count} posts via deepstrain")
+    t0 = time.monotonic()
+    posts = generate_batch(camp, platform, count=count, ds_url=ds_url or camp.deepstrain_url)
+    elapsed = time.monotonic() - t0
 
-    total_chars = sum(len(p.get("body", "")) for p in posts)
-    avg_chars = total_chars / len(posts) if posts else 0
+    total_chars = sum(len(p.get("body","")) for p in posts)
 
-    click.echo(f"\n=== Benchmark Results ===")
-    click.echo(f"Posts generated : {len(posts)}/{count}")
-    click.echo(f"Total time      : {elapsed:.1f}s")
-    click.echo(f"Avg time/post   : {elapsed/max(len(posts),1):.1f}s")
-    click.echo(f"Total chars     : {total_chars}")
-    click.echo(f"Avg chars/post  : {avg_chars:.0f}")
+    click.echo(f"\n{'='*50}")
+    click.echo(f"Generated    : {len(posts)}/{count} posts")
+    click.echo(f"Total time   : {elapsed:.1f}s")
+    click.echo(f"Avg/post     : {elapsed/max(len(posts),1):.1f}s")
+    click.echo(f"Avg chars    : {total_chars//max(len(posts),1)}")
+    click.echo(f"Best style   : {best_post_type(campaign_name, platform)} (from history)")
 
     for i, p in enumerate(posts, 1):
-        click.echo(f"\n--- Post {i} [{p.get('post_type')}] ---")
-        click.echo(f"Title: {p.get('title', '(none)')}")
-        click.echo(f"Body ({len(p.get('body',''))} chars):\n{p.get('body','')[:300]}{'...' if len(p.get('body','')) > 300 else ''}")
+        click.echo(f"\n─── Post {i} [{p.get('post_type')}] ───")
+        click.echo(f"Title: {p.get('title','(none)')}")
+        body = p.get("body","")
+        click.echo(f"Body ({len(body)} chars): {body[:200]}{'...' if len(body)>200 else ''}")
 
 
 def main():

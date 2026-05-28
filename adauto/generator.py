@@ -40,6 +40,14 @@ def _build_prompt(campaign: Campaign, platform: str, post_type: str,
     tone = _PLATFORM_TONES.get(platform, "Professional and technical.")
     ptype_instr = _POST_TYPE_INSTRUCTIONS.get(post_type, "Write a relevant post about the tool.")
 
+    # Adaptive learning: inject what's worked before
+    learning_ctx = ""
+    try:
+        from .analytics import build_learning_context
+        learning_ctx = build_learning_context(campaign.name, platform, post_type)
+    except Exception:
+        pass
+
     return f"""IMPORTANT: This is a pure text generation task. Do NOT use any tools, do NOT search files, do NOT run commands. Just write the content directly.
 
 {_SYSTEM_CONTEXT}
@@ -58,6 +66,7 @@ POST TYPE: {post_type}
 Instructions: {ptype_instr}
 
 {f'EXTRA CONTEXT: {extra_context}' if extra_context else ''}
+{learning_ctx}
 
 Write ONE post for this platform. Return a JSON object with these keys:
 - "title": post title (null if platform doesn't use titles, e.g. Twitter)

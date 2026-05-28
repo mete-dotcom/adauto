@@ -34,7 +34,7 @@ def init_db() -> None:
             title         TEXT,
             body          TEXT,
             url           TEXT,           -- posted URL / thread URL
-            status        TEXT DEFAULT 'queued',  -- queued | posted | failed | skipped
+            status        TEXT DEFAULT 'pending_approval',  -- pending_approval | approved | queued | posted | failed | skipped
             scheduled_at  TEXT,
             posted_at     TEXT,
             error         TEXT,
@@ -99,6 +99,47 @@ def mark_failed(post_id: int, error: str) -> None:
             "UPDATE posts SET status='failed', error=? WHERE id=?",
             (error, post_id)
         )
+
+
+def approve_post(post_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE posts SET status='approved' WHERE id=?", (post_id,))
+
+
+def skip_post(post_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE posts SET status='skipped' WHERE id=?", (post_id,))
+
+
+def update_post_body(post_id: int, title: str, body: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE posts SET title=?, body=? WHERE id=?",
+                     (title, body, post_id))
+
+
+def get_pending_approval(campaign_name: str = None, platform: str = None) -> list:
+    with get_conn() as conn:
+        q = "SELECT * FROM posts WHERE status='pending_approval'"
+        args = []
+        if campaign_name:
+            q += " AND campaign_name=?"
+            args.append(campaign_name)
+        if platform:
+            q += " AND platform=?"
+            args.append(platform)
+        q += " ORDER BY created ASC"
+        return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+
+def get_approved(platform: str = None) -> list:
+    with get_conn() as conn:
+        q = "SELECT * FROM posts WHERE status='approved'"
+        args = []
+        if platform:
+            q += " AND platform=?"
+            args.append(platform)
+        q += " ORDER BY created ASC"
+        return [dict(r) for r in conn.execute(q, args).fetchall()]
 
 
 def get_queued(platform: str = None) -> list:
