@@ -2,161 +2,121 @@
 
 ## What is adauto?
 
-adauto is a developer marketing automation agent. It generates platform-specific posts
-(Reddit, dev.to, Twitter/X) for software products, learns from engagement data, and
-adapts future content accordingly.
+Local developer marketing automation. Runs on user's machine. 
+Generates posts, learns from engagement, adapts strategy. 
+Human approval required before any post goes live.
 
-**Critical constraint:** Posts are NEVER published automatically. Every post requires
-explicit human approval before going live.
+**Port: 8766**
 
-## Architecture
+## Quick start (3 calls = full cycle)
 
 ```
-deepstrain (/eval) → content generation
-adauto HTTP server → orchestration + approval gate + learning
-SQLite (~/.adauto/adauto.db) → posts, metrics, learning data
-Campaign TOML (~/.adauto/campaigns/*.toml) → product config
+POST /exec {"tool":"run",     "args":{"campaign":"deepstrain"}}
+POST /approve {"campaign":"deepstrain"}
+POST /exec {"tool":"post",    "args":{"campaign":"deepstrain"}}
 ```
 
-## HTTP Server
+Done. adauto handled everything else internally.
 
-Default port: **8766**
+## GET / (self-description, ~150 tokens)
 
 ```bash
-curl http://localhost:8766/          # self-description
-curl http://localhost:8766/health    # liveness
-curl http://localhost:8766/tools     # tool list
+curl http://localhost:8766/
 ```
 
-## Workflow (always in this order)
+Returns tool names + descriptions. Read this first if you don't know what campaigns exist.
 
-### 1. Generate posts
-```bash
-POST /exec {"tool": "generate_post", "args": {"campaign": "deepstrain", "platform": "reddit", "post_type": "showcase"}}
-```
-→ Returns post content + `post_id` with `status: "pending_approval"`
+## 5 Tools
 
-### 2. Review pending posts
-```bash
-POST /exec {"tool": "get_pending_approval", "args": {}}
-```
-→ Returns list of posts waiting for approval
-
-### 3. Approve (or skip)
-```bash
-POST /approve {"post_id": 42}
-POST /approve {"approve_all": true}          # approve all pending
-POST /skip {"post_id": 43}
-```
-
-### 4. Publish approved posts
-```bash
-POST /exec {"tool": "run_campaign", "args": {"campaign": "deepstrain"}}
-```
-→ Only `status=approved` posts are published
-
-### 5. Check engagement (learning)
-```bash
-POST /exec {"tool": "check_engagement", "args": {}}
-```
-→ Polls Reddit for upvotes/comments, updates learning data
-
-### 6. View learning scores
-```bash
-POST /exec {"tool": "score_styles", "args": {"campaign": "deepstrain"}}
-```
-→ Shows which post_types perform best per platform
-
-## /eval — Natural language agent
-
-```bash
-POST /eval {"prompt": "Generate 3 Reddit posts for deepstrain, showcase type"}
-POST /eval {"prompt": "What posts are pending approval for code-atlas?"}
-POST /eval {"prompt": "How is the deepstrain campaign performing?"}
-```
-
-For complex tasks, plan-first is triggered automatically:
-```bash
-POST /eval {"prompt": "Run a full deepstrain marketing cycle for this week"}
-# → Returns plan_id + plan text
-
-POST /eval {"plan_id": "abc123", "approved": true}
-# → Executes the approved plan
-```
-
-## Available Tools (POST /exec)
-
-| Tool | Args | Description |
+| Tool | Args | What it does |
 |------|------|-------------|
-| `list_campaigns` | — | List all configured campaigns |
-| `get_stats` | — | Posting statistics by platform/status |
-| `get_pending_approval` | campaign?, platform? | Posts waiting for approval |
-| `get_approved` | platform? | Approved posts ready to publish |
-| `approve_post` | post_id | Approve a specific post |
-| `skip_post` | post_id | Skip/reject a specific post |
-| `generate_post` | campaign, platform, post_type?, extra_context? | Generate one post |
-| `run_campaign` | campaign, platform?, dry_run? | Publish approved posts |
-| `check_engagement` | — | Poll platforms for upvote/comment data |
-| `score_styles` | campaign? | Show performance scores (learning) |
+| `run` | campaign | Strategy → generate → queue (does NOT post) |
+| `status` | — | Pending/approved/posted counts |
+| `approve` | post_id OR campaign | Approve for publishing |
+| `post` | campaign, dry_run? | Publish approved posts only |
+| `report` | campaign? | ROI: cost-per-score, best strategy |
 
-## Campaign Config (TOML)
-
-Location: `~/.adauto/campaigns/<name>.toml`
-
-```toml
-[campaign]
-name         = "deepstrain"
-product      = "deepstrain"
-tagline      = "Local AI engineering agent — 51 tools, plan-first, always-on"
-install_cmd  = "pip install deepstrain"
-repo_url     = "https://github.com/mete-dotcom/awesome-deepseek-agent"
-site_url     = "https://deepstrain.dev"
-deepstrain_url = "http://localhost:8765"
-enabled      = true
-
-[platforms.reddit]
-enabled        = true
-posts_per_day  = 0.5
-cooldown_hours = 48
-post_types     = ["showcase", "tutorial", "question"]
-subreddits     = ["LocalLLaMA", "Python", "programming"]
-```
-
-## Learning / Adaptive Generation
-
-adauto tracks which posts perform best and injects examples into future prompts.
-
-Score formula: `upvotes + 3×comments` (comments = deeper engagement)
-
-When generating a post, if there are high-performing examples in the DB, the prompt
-includes them as few-shot examples:
-
-```
-WHAT HAS WORKED WELL (real posts, ranked by engagement):
-Example 1 [tutorial] (47 upvotes, 12 comments):
-  Title: ...
-  Body excerpt: ...
-```
-
-This means each campaign improves over time without ML — pure signal loop.
-
-## OS Service
+## POST /exec
 
 ```bash
-adauto service install   # register as OS service (auto-starts on boot)
-adauto service start     # start now
-adauto service stop      # stop
-adauto service status    # check
-adauto service uninstall # remove
+curl -X POST http://localhost:8766/exec \
+  -H "Content-Type: application/json" \
+  -d '{"tool":"run","args":{"campaign":"deepstrain"}}'
 ```
 
-The service auto-shuts down after idle timeout (default 1800s).
-The OS then restarts it on next activity or on reboot.
-
-## mDNS Discovery
-
-adauto broadcasts as `adauto.local` and `adauto-<hostname>.local` on port 8766.
+## POST /approve
 
 ```bash
-adauto beacon --discover   # find other adauto instances on LAN
+# Approve all pending for a campaign
+curl -X POST http://localhost:8766/approve \
+  -d '{"campaign":"deepstrain"}'
+
+# Approve specific post
+curl -X POST http://localhost:8766/approve \
+  -d '{"post_id":42}'
+```
+
+## POST /eval (natural language)
+
+```bash
+curl -X POST http://localhost:8766/eval \
+  -d '{"prompt":"Run the deepstrain campaign"}'
+```
+
+For complex multi-step tasks, plan-first is triggered automatically:
+```bash
+# Step 1 — get plan
+curl -X POST http://localhost:8766/eval \
+  -d '{"prompt":"Run a full marketing cycle for all campaigns this week"}'
+# → {"status":"plan_ready","plan":"...","plan_id":"abc123"}
+
+# Step 2 — execute approved plan
+curl -X POST http://localhost:8766/eval \
+  -d '{"plan_id":"abc123","approved":true}'
+```
+
+## Strategy algorithm (internal — LLMs don't need to know this)
+
+When `run` is called:
+1. Check which platforms are due (posts_per_day cooldown)
+2. For each due platform:
+   - If ≥2 historical posts: **exploit** (use best performing post_type)
+   - If new: **explore** (try untried post_types first)
+   - Pick subreddit not on cooldown, rank by historical score
+3. Generate content via deepstrain /eval (feeds top examples as few-shot)
+4. Save as `pending_approval` — NEVER auto-publishes
+
+## Cost tracking
+
+`report` shows:
+- `estimated_total_cost_usd` — sum of generation costs
+- `cost_per_score_point` — $USD per (upvote + 3×comment)
+- `best_strategy` — platform/post_type with lowest cost-per-score
+
+## Campaign config location
+
+`~/.adauto/campaigns/<name>.toml`
+
+Copy from the repo's `campaigns/` directory.
+
+## CLI equivalents
+
+```bash
+adauto generate deepstrain     # = run tool
+adauto review                  # interactive approval
+adauto post deepstrain         # = post tool
+adauto check-engagement        # poll for upvotes/comments
+adauto benchmark deepstrain    # timing + quality test
+adauto service install         # auto-start on boot
+adauto license activate <key>  # activate Paddle license
+```
+
+## Licensing
+
+Free tier: 1 campaign, 3 posts/day.
+Paid: unlimited. Get license at https://adauto.dev
+
+```bash
+adauto license activate ADTO-XXXXX-XXXXX-XXXXX-XXXXX
+adauto license status
 ```

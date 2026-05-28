@@ -476,6 +476,39 @@ def benchmark(campaign_name, platform, count, ds_url):
         click.echo(f"Body ({len(body)} chars): {body[:200]}{'...' if len(body)>200 else ''}")
 
 
+# ── adauto license ────────────────────────────────────────────────────────────
+
+@cli.group()
+def license():
+    """Manage adauto license (Paddle)."""
+    pass
+
+
+@license.command("activate")
+@click.argument("key")
+def license_activate(key):
+    """Activate a license key. Get yours at adauto.dev"""
+    from .license import activate
+    result = activate(key)
+    if result["ok"]:
+        click.echo(f"✓ {result['message']}")
+    else:
+        click.echo(f"✗ {result['message']}", err=True)
+        sys.exit(1)
+
+
+@license.command("status")
+def license_status():
+    """Show current license status."""
+    from .license import status as lic_status
+    s = lic_status()
+    if s["licensed"]:
+        click.echo(f"✓ Licensed  tier={s['tier']}  key={s['key']}")
+    else:
+        click.echo(f"  Free tier  ({s['campaigns_allowed']} campaign, {s['posts_per_day_allowed']} posts/day)")
+        click.echo(f"  {s['message']}")
+
+
 def main():
     cli()
 
