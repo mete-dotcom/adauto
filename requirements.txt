@@ -1,0 +1,4 @@
+click>=8.1
+requests>=2.31
+praw>=7.7
+tweepy>=4.14

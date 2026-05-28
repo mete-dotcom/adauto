@@ -1,0 +1,35 @@
+[campaign]
+name         = "code-atlas"
+product      = "code-atlas"
+tagline      = "Codebase intelligence — instant search, symbols, relationships"
+install_cmd  = "pip install code-atlas"
+repo_url     = "https://github.com/mete-dotcom/code-atlas"
+site_url     = "https://code-atlas.dev"
+deepstrain_url = "http://localhost:8765"
+enabled      = true
+
+[platforms.reddit]
+enabled        = true
+posts_per_day  = 0.5
+cooldown_hours = 48
+post_types     = ["showcase", "tutorial", "comparison"]
+subreddits     = [
+    "programming",
+    "Python",
+    "SoftwareEngineering",
+    "webdev",
+    "neovim",
+    "vscode",
+    "emacs",
+    "SideProject",
+]
+
+[platforms.devto]
+enabled       = true
+posts_per_day = 0.25
+post_types    = ["tutorial", "comparison"]
+
+[platforms.twitter]
+enabled       = true
+posts_per_day = 1.0
+post_types    = ["showcase", "comparison"]

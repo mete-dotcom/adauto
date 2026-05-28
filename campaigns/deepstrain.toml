@@ -1,0 +1,34 @@
+[campaign]
+name         = "deepstrain"
+product      = "deepstrain"
+tagline      = "Local AI engineering agent — 51 tools, plan-first, always-on"
+install_cmd  = "pip install deepstrain"
+repo_url     = "https://github.com/mete-dotcom/awesome-deepseek-agent"
+site_url     = "https://deepstrain.dev"
+deepstrain_url = "http://localhost:8765"
+enabled      = true
+
+[platforms.reddit]
+enabled        = true
+posts_per_day  = 0.5    # every 2 days
+cooldown_hours = 48
+post_types     = ["showcase", "tutorial", "question"]
+subreddits     = [
+    "LocalLLaMA",
+    "MachineLearning",
+    "Python",
+    "programming",
+    "SideProject",
+    "devops",
+    "AIAssistants",
+]
+
+[platforms.devto]
+enabled       = true
+posts_per_day = 0.25   # once every 4 days
+post_types    = ["tutorial", "showcase"]
+
+[platforms.twitter]
+enabled       = true
+posts_per_day = 1.0
+post_types    = ["showcase", "update"]

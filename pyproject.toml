@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "adauto"
+version = "0.1.0"
+description = "Multi-platform developer marketing automation — Reddit, dev.to, Twitter"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "requests>=2.31",
+    "tomllib; python_version < '3.11'",
+    "praw>=7.7",
+    "tweepy>=4.14",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff"]
+
+[project.scripts]
+adauto = "adauto.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["adauto*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
