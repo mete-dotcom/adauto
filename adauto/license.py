@@ -13,7 +13,7 @@ from typing import Optional
 from .licensing_core import is_valid_format, tier_from_key, FREE_TIER_CAMPAIGNS, FREE_TIER_POSTS_PER_DAY
 
 LICENSE_FILE    = Path.home() / ".adauto" / "license.json"
-VERIFY_ENDPOINT = "https://adauto.vercel.app/api/verify"  # update after deploy
+VERIFY_ENDPOINT = "https://awesome-deepseek-agent-main.vercel.app/api/verify"
 
 
 def _load() -> dict:
