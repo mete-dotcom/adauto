@@ -102,6 +102,30 @@ class RedditPoster:
             print(f"[reddit] FAILED r/{subreddit}: {err}")
             return None
 
+    def reply(self, thread_url: str, body: str) -> Optional[str]:
+        """
+        Post a comment reply to an existing Reddit thread.
+        Used by the pain-responder to answer threads where someone needs help.
+
+        thread_url: full reddit URL (e.g. https://reddit.com/r/Python/comments/...)
+        Returns: comment permalink or None on failure.
+        """
+        try:
+            # Extract submission id from URL
+            import re as _re
+            m = _re.search(r"comments/([a-z0-9]+)", thread_url)
+            if not m:
+                print(f"[reddit] reply: cannot parse submission id from {thread_url}")
+                return None
+            submission = self.reddit.submission(id=m.group(1))
+            comment = submission.reply(body)
+            url = f"https://reddit.com{comment.permalink}"
+            print(f"[reddit] replied: {url}")
+            return url
+        except Exception as e:
+            print(f"[reddit] reply FAILED: {e}")
+            return None
+
     def run_campaign(self, campaign: Campaign, posts: list[dict],
                      dry_run: bool = False) -> list[str]:
         """

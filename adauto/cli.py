@@ -649,6 +649,56 @@ def signals(campaign_name, status, limit, show_stats):
         click.echo()
 
 
+# ── adauto respond ───────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("campaign_name")
+@click.option("--min-confidence", default=0.5, show_default=True,
+              help="Min pain-match confidence to queue a response (0-1)")
+@click.option("--ds-url", default="http://localhost:8765",
+              help="deepstrain URL for response personalisation (optional)")
+@click.option("--no-brain", is_flag=True, default=False,
+              help="Use template responses only, skip deepstrain enrichment")
+@click.option("--verbose", "-v", is_flag=True, default=False)
+def respond(campaign_name, min_confidence, ds_url, no_brain, verbose):
+    """Detect pain in found signals and queue helpful responses.
+
+    \b
+    Reads signals from `adauto hunt`, matches them to known pain patterns
+    (codebase too large / can't find bug / AI-generated mystery / etc.),
+    drafts a GENUINE HELPFUL response, passes it through the ethics gate,
+    then queues it as pending_approval — waiting for `adauto review`.
+
+    Nothing posts automatically. Human approval always required.
+
+    \b
+    adauto respond deepstrain              # process all new signals
+    adauto respond deepstrain --no-brain   # template-only, zero LLM cost
+    adauto respond deepstrain --verbose    # show matched pain patterns
+    """
+    from .responder import scan_and_queue
+
+    click.echo(f"[respond] scanning signals for: {campaign_name}")
+    click.echo(f"[respond] min confidence: {min_confidence:.0%}  brain: {'no' if no_brain else ds_url}")
+    click.echo()
+
+    result = scan_and_queue(
+        campaign_name=campaign_name,
+        min_confidence=min_confidence,
+        ds_url=ds_url,
+        use_brain=not no_brain,
+        verbose=verbose,
+    )
+
+    click.echo(f"\n[respond] done")
+    click.echo(f"  signals scanned   : {result['scanned']}")
+    click.echo(f"  pain detected     : {result['pain_found']}")
+    click.echo(f"  queued (pending)  : {result['queued']}")
+    click.echo(f"  blocked by ethics : {result['blocked_by_ethics']}")
+    if result["queued"]:
+        click.echo(f"\n  Run `adauto review` to read and approve each response before posting.")
+
+
 # ── adauto report ─────────────────────────────────────────────────────────────
 
 @cli.command()

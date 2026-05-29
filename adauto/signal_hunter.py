@@ -119,12 +119,18 @@ def hunt_hn(keywords: list[str], limit: int = 20) -> list[Signal]:
     # Use plain keywords joined with spaces — Algolia treats them as OR.
     # Quoted multi-word phrases are too strict and return 0 results.
     query = urllib.parse.quote(" ".join(keywords[:4]))
-    # tags= accepts a single tag value; "story,comment" returns 0 (AND filter).
-    # Fetch stories only — most signal value, title always present.
-    data = _json_get(
+    # Fetch both stories and Ask HN in two passes.
+    # "ask_hn" tag captures "Ask HN: how do I..." threads — highest pain signal.
+    # tags= accepts a single value (AND of multiple tags returns 0).
+    data_story = _json_get(
         f"https://hn.algolia.com/api/v1/search_by_date"
         f"?query={query}&tags=story&hitsPerPage={limit}"
-    )
+    ) or {"hits": []}
+    data_ask = _json_get(
+        f"https://hn.algolia.com/api/v1/search_by_date"
+        f"?query={query}&tags=ask_hn&hitsPerPage={limit}"
+    ) or {"hits": []}
+    data = {"hits": data_story.get("hits", []) + data_ask.get("hits", [])}
     if not isinstance(data, dict):
         return []
     for hit in data.get("hits", []):
