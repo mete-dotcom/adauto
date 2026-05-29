@@ -241,34 +241,34 @@ Free tier: 1 campaign, 3 posts/day. What did you build?\
         "llm_token_limit",
         "deepstrain",
         [
-            r"\b(claude|chatgpt|gpt.?4|gpt.?o|gemini|copilot)\b.{0,40}\b(limit|quota|cap|reset|out of|hit the|exceeded|waiting)\b",
-            r"\b(token|usage|rate).{0,20}\b(limit|reset|exceed|cap|hit)\b.{0,30}\b(claude|gpt|chatgpt|ai|llm)\b",
-            r"\b(wait(ing)?|resett?ing).{0,30}\b(claude|gpt|quota|token|limit|5 hour|5h|reset)\b",
-            r"\bclaude.{0,30}(not (working|available|responding)|down|slow|offline)\b",
-            r"\b(alternative|alternatives|replacement|instead of|without limit)\b.{0,30}\b(claude|chatgpt|gpt|copilot|ai|llm)\b",
-            r"\b(claude|chatgpt|gpt).{0,20}(alternative|replacement|substitute|without (limit|quota))\b",
-            r"\b(5 hour|5h|several hours?).{0,20}(wait|reset|before|until)\b",
-            r"\b(lost.{0,20}context|context.{0,20}reset|session.{0,20}expired)\b.{0,30}\b(claude|gpt|ai|llm)\b",
+            r"\b(claude|chatgpt|gpt.?4|gpt.?o|gemini|copilot|cursor|antigravity|windsurf|codeium|cody)\b.{0,40}\b(limit|quota|cap|reset|out of|hit the|exceeded|waiting|ran out)\b",
+            r"\b(token|usage|rate|message|request)\b.{0,20}\b(limit|reset|exceed|cap|hit|ran out)\b.{0,30}\b(claude|gpt|chatgpt|cursor|antigravity|windsurf|ai|llm)\b",
+            r"\b(wait(ing)?|resett?ing).{0,30}\b(claude|gpt|cursor|antigravity|quota|token|limit|5 hour|5h|reset)\b",
+            r"\b(claude|cursor|antigravity|windsurf|copilot).{0,30}(not (working|available|responding)|down|slow|offline|unusable)\b",
+            r"\b(alternative|alternatives|replacement|instead of|without limit|cheaper than)\b.{0,30}\b(claude|chatgpt|gpt|copilot|cursor|antigravity|windsurf|ai|llm)\b",
+            r"\b(claude|chatgpt|gpt|cursor|antigravity).{0,20}(alternative|replacement|substitute|without (limit|quota|subscription))\b",
+            r"\b(cancel(ed|ling)?|too expensive|not worth|dropping)\b.{0,25}\b(cursor|antigravity|copilot|subscription|claude pro|chatgpt plus)\b",
+            r"\b(cursor|antigravity|copilot|claude pro|chatgpt plus)\b.{0,25}\b(too expensive|not worth|cancel(ing|led)?|overpriced|dropping)\b",
+            r"\b(5 hour|5h|several hours?|monthly).{0,20}(wait|reset|before|until|limit)\b",
+            r"\b(lost.{0,20}context|context.{0,20}reset|session.{0,20}expired)\b.{0,30}\b(claude|gpt|cursor|ai|llm)\b",
         ],
-        "Cloud LLM token limit hit, waiting for reset or seeking alternative",
-        "deepstrain works locally with Ollama — same tools, no wait, no quota",
+        "Cloud AI tool limit hit (Claude/Cursor/Antigravity/etc), waiting or seeking alternative",
+        "deepstrain works locally — same agent tools, no monthly cap, no reset wait",
         """\
-If you're hitting Claude's (or any cloud LLM's) session limit, the reset \
-wait is frustrating — especially mid-task when you have context loaded.
+Hitting the limit on a cloud AI tool (Claude, Cursor, Antigravity, Copilot…) \
+mid-task is the worst — you lose flow waiting for a reset, or pay for another seat.
 
-**deepstrain** runs fully local with your own key (DeepSeek API, ~$0.009/task) \
-or with a local model via Ollama — no session limits, no 5-hour waits, \
-your data never leaves your machine.
+**deepstrain** runs the agent loop locally with your own key (DeepSeek, ~$0.009/task) \
+or a fully local model via Ollama — no monthly cap, no reset window, \
+your code never leaves your machine. 51 tools: file edits, git, tests, sub-agents.
 
 ```bash
 pip install deepstrain
-deepstrain    # first run: guided setup, get a free DeepSeek key
+deepstrain    # guided setup; pick a local model or bring a DeepSeek key
 ```
 
-If you already have Ollama: `set DEEPSTRAIN_BASE_URL=http://localhost:11434/v1` \
-and it uses your local model instead — zero API cost, zero wait.
-
-What were you working on when the limit hit?\
+Good as a fallback for exactly this: when your main tool's quota runs out, \
+keep going locally instead of waiting. What were you working on when it hit?\
 """,
     ),
 
