@@ -218,6 +218,112 @@ def hunt_devto(keywords: list[str], limit: int = 15) -> list[Signal]:
     return signals[:limit]
 
 
+def hunt_lobsters(keywords: list[str], limit: int = 15) -> list[Signal]:
+    """lobste.rs — newest stories RSS (JSON API deprecated). High-signal dev community."""
+    # lobste.rs exposes per-tag RSS: /t/<tag>.rss and /newest.rss
+    signals = []
+    feeds = ["https://lobste.rs/newest.rss",
+             "https://lobste.rs/t/python.rss",
+             "https://lobste.rs/t/programming.rss"]
+    seen: set[str] = set()
+    for feed_url in feeds:
+        raw = _get(feed_url)
+        if not raw:
+            continue
+        try:
+            root = ET.fromstring(raw)
+            for item in root.findall(".//item"):
+                title = item.findtext("title") or ""
+                desc = re.sub(r"<[^>]+>", " ", item.findtext("description") or "")[:400]
+                link = item.findtext("link") or ""
+                if link in seen:
+                    continue
+                seen.add(link)
+                matched = _match_kw(f"{title} {desc}", keywords)
+                if matched:
+                    signals.append(Signal("lobsters", link, title, desc, "", 0, matched))
+        except Exception:
+            continue
+    return signals[:limit]
+
+
+def hunt_indiehackers(keywords: list[str], limit: int = 15) -> list[Signal]:
+    """Indie Hackers — IH exposes no public RSS. Use their public posts endpoint."""
+    # IH has a Firebase/public-facing posts at /api/posts (no auth needed for public posts)
+    signals = []
+    try:
+        data = _json_get("https://www.indiehackers.com/api/posts?limit=30&orderBy=createdAt")
+        if not isinstance(data, list):
+            return []
+        for post in data:
+            title = post.get("title") or post.get("rawTitle") or ""
+            body = re.sub(r"<[^>]+>", " ", post.get("rawBody") or post.get("body") or "")[:400]
+            url = "https://www.indiehackers.com/post/" + post.get("slug", "")
+            author = post.get("userDisplayName", "")
+            score = post.get("commentCount", 0) + post.get("upvoteCount", 0)
+            matched = _match_kw(f"{title} {body}", keywords)
+            if matched:
+                signals.append(Signal("indiehackers", url, title, body, author, score, matched))
+    except Exception:
+        pass
+    return signals[:limit]
+
+
+def hunt_hashnode(keywords: list[str], limit: int = 15) -> list[Signal]:
+    """Hashnode — public tag RSS feeds (no API key, no GraphQL auth needed)."""
+    # Hashnode exposes RSS per tag: hashnode.com/n/<tag>/rss.xml
+    tag_map = {
+        "python":   "python", "llm": "llm", "agent": "ai",
+        "mcp": "mcp", "code": "programming", "local": "selfhosted",
+    }
+    signals = []
+    seen: set[str] = set()
+    for kw in keywords[:4]:
+        tag = tag_map.get(kw.lower(), urllib.parse.quote(kw.lower()))
+        raw = _get(f"https://hashnode.com/n/{tag}/rss.xml")
+        if not raw:
+            continue
+        try:
+            root = ET.fromstring(raw)
+            for item in root.findall(".//item"):
+                title = item.findtext("title") or ""
+                desc = re.sub(r"<[^>]+>", " ", item.findtext("description") or "")[:400]
+                link = item.findtext("link") or ""
+                if link in seen:
+                    continue
+                seen.add(link)
+                matched = _match_kw(f"{title} {desc}", keywords)
+                if matched:
+                    signals.append(Signal("hashnode", link, title, desc, "", 0, matched))
+        except Exception:
+            continue
+    return signals[:limit]
+
+
+def hunt_producthunt(keywords: list[str], limit: int = 15) -> list[Signal]:
+    """Product Hunt discussions RSS — find people discussing similar products."""
+    # PH doesn't expose full search RSS without API key, but the discussions
+    # and topics feeds are public and useful for competitor/need detection.
+    raw = _get("https://www.producthunt.com/feed")
+    if not raw:
+        return []
+    signals = []
+    try:
+        root = ET.fromstring(raw)
+        for item in root.findall(".//item")[:limit * 3]:
+            title = item.findtext("title") or ""
+            desc = re.sub(r"<[^>]+>", " ", item.findtext("description") or "")[:400]
+            link = item.findtext("link") or ""
+            combined = f"{title} {desc}"
+            matched = _match_kw(combined, keywords)
+            if matched:
+                signals.append(Signal("producthunt", link, title,
+                                      desc, "", 0, matched))
+    except Exception:
+        pass
+    return signals[:limit]
+
+
 def hunt_so(keywords: list[str], limit: int = 15) -> list[Signal]:
     """Stack Overflow free API (300 req/day unauthed, 10000 authed)."""
     q = urllib.parse.quote(";".join(keywords[:3]))
@@ -245,11 +351,15 @@ def hunt_so(keywords: list[str], limit: int = 15) -> list[Signal]:
 
 # platform_name → (hunter_fn, supports_subreddit_arg)
 _HUNTERS: dict[str, Callable] = {
-    "hn":     hunt_hn,
-    "github": hunt_github,
-    "pypi":   hunt_pypi,
-    "devto":  hunt_devto,
-    "so":     hunt_so,
+    "hn":           hunt_hn,
+    "github":       hunt_github,
+    "pypi":         hunt_pypi,
+    "devto":        hunt_devto,
+    "so":           hunt_so,
+    "lobsters":     hunt_lobsters,
+    "indiehackers": hunt_indiehackers,
+    "hashnode":     hunt_hashnode,
+    "producthunt":  hunt_producthunt,
 }
 
 
