@@ -524,6 +524,131 @@ def run(campaign, platform, ds_url, dry_run, once):
     click.echo(f"\n{count} post(s) queued. Run `adauto review` to approve before posting.")
 
 
+# ── adauto hunt (zero-cost cross-platform signal detection) ──────────────────
+
+@cli.command()
+@click.argument("campaign_name")
+@click.option("--platforms", "-p", default=None,
+              help="Comma-separated: reddit,hn,github,devto,so (default: all)")
+@click.option("--no-chain", is_flag=True, default=False,
+              help="Skip cross-platform chain search")
+@click.option("--github-token", default=None, envvar="GITHUB_TOKEN",
+              help="GitHub PAT for 5000 req/h instead of 60")
+@click.option("--verbose", "-v", is_flag=True, default=False)
+def hunt(campaign_name, platforms, no_chain, github_token, verbose):
+    """Zero-cost cross-platform signal hunting.
+
+    \b
+    Scans Reddit, HN, GitHub, dev.to, Stack Overflow for posts/issues/
+    discussions that match your campaign keywords. When a signal is found
+    on one platform the chain search automatically traces the same need
+    on the others.
+
+    \b
+    No API keys required (falls back to public endpoints).
+    No LLM tokens consumed. Deterministic regex matching.
+
+    \b
+    adauto hunt deepstrain                    # all platforms
+    adauto hunt deepstrain -p reddit,hn       # specific platforms
+    adauto hunt deepstrain --no-chain         # single-platform only
+    adauto hunt deepstrain --verbose          # live progress
+    """
+    from .config import load_campaign
+    from .signal_hunter import run_hunt
+
+    camp = load_campaign(campaign_name)
+    if not camp:
+        click.echo(f"[error] campaign not found: {campaign_name}", err=True)
+        sys.exit(1)
+
+    kw = (list(camp.key_features) + camp.differentiators +
+          [camp.product, camp.tagline.split()[0] if camp.tagline else ""])
+    kw = [k for k in kw if k and len(k) > 2][:12]
+    if not kw:
+        kw = [camp.product, camp.name]
+
+    plat_list = [p.strip() for p in platforms.split(",")] if platforms else None
+    subs = getattr(camp.get_platform("reddit"), "subreddits", None) if camp.get_platform("reddit") else None
+
+    click.echo(f"[hunt] {campaign_name}  keywords: {', '.join(kw[:6])}")
+    click.echo(f"[hunt] platforms: {', '.join(plat_list or ['reddit','hn','github','devto','so'])}")
+    click.echo(f"[hunt] chain: {'no' if no_chain else 'yes'}")
+    click.echo()
+
+    result = run_hunt(
+        campaign_name=campaign_name,
+        keywords=kw,
+        subreddits=subs,
+        platforms=plat_list,
+        chain=not no_chain,
+        github_token=github_token,
+        verbose=verbose,
+    )
+
+    click.echo(f"\n[hunt] done")
+    click.echo(f"  new signals    : {result['new_signals']}")
+    click.echo(f"  chained        : {result['chained']}")
+    click.echo(f"  total new      : {result['total_new']}")
+    click.echo(f"\n  Run `adauto signals {campaign_name}` to review.")
+
+
+# ── adauto signals (view + act on found signals) ──────────────────────────────
+
+@cli.command()
+@click.argument("campaign_name", required=False, default=None)
+@click.option("--status", "-s", default="new",
+              type=click.Choice(["new", "reviewed", "acted", "ignored", "all"]),
+              show_default=True)
+@click.option("--limit", "-n", default=30, show_default=True)
+@click.option("--stats", "show_stats", is_flag=True, default=False)
+def signals(campaign_name, status, limit, show_stats):
+    """Review signals found by `adauto hunt`.
+
+    \b
+    adauto signals deepstrain          # new signals for campaign
+    adauto signals --stats             # platform breakdown
+    adauto signals deepstrain -s all   # all statuses
+    """
+    from . import signal_store as ss
+
+    if show_stats:
+        st = ss.stats()
+        if not st:
+            click.echo("No signals yet. Run `adauto hunt <campaign>` first.")
+            return
+        click.echo("\n=== signal stats ===")
+        for plat, statuses in st.items():
+            total = sum(statuses.values())
+            parts = "  ".join(f"{s}:{n}" for s, n in sorted(statuses.items()))
+            click.echo(f"  {plat:10} [{parts}]  total={total}")
+        return
+
+    rows = (ss.get_new(campaign_name, limit)
+            if status == "new"
+            else ss.get_all(campaign_name, limit))
+
+    if status not in ("new", "all"):
+        rows = [r for r in rows if r["status"] == status]
+
+    if not rows:
+        click.echo(f"No {status} signals" +
+                   (f" for {campaign_name}" if campaign_name else "") + ".")
+        click.echo("Run `adauto hunt <campaign>` to scan platforms.")
+        return
+
+    click.echo(f"\n{len(rows)} signal(s)  [{status}]\n")
+    for r in rows:
+        kw = ", ".join(json.loads(r["matched_kw"] or "[]"))
+        chain = json.loads(r["chain_ids"] or "[]")
+        chain_tag = f"  🔗 chain:{len(chain)}" if chain else ""
+        click.echo(f"  #{r['id']:3d} [{r['platform']:6}] {r['status']:8}  ↑{r['score']:4d}  "
+                   f"kw=[{kw}]{chain_tag}")
+        click.echo(f"        {(r['title'] or '')[:80]}")
+        click.echo(f"        {r['signal_url'][:90]}")
+        click.echo()
+
+
 # ── adauto report ─────────────────────────────────────────────────────────────
 
 @cli.command()
