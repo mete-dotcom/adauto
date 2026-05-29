@@ -68,6 +68,23 @@ def _build_prompt(campaign: Campaign, platform: str, post_type: str,
         except Exception:
             pass
 
+    # Build rich product context from campaign fields
+    product_ctx_lines = []
+    if campaign.product_description:
+        product_ctx_lines.append(f"PRODUCT DESCRIPTION:\n{campaign.product_description.strip()}")
+    if campaign.key_features:
+        features_str = "\n".join(f"  • {f}" for f in campaign.key_features)
+        product_ctx_lines.append(f"KEY FEATURES:\n{features_str}")
+    if campaign.differentiators:
+        diff_str = "\n".join(f"  • {d}" for d in campaign.differentiators)
+        product_ctx_lines.append(f"DIFFERENTIATORS (use for comparison posts):\n{diff_str}")
+    if campaign.target_audience:
+        aud_str = "\n".join(f"  • {a}" for a in campaign.target_audience)
+        product_ctx_lines.append(f"TARGET AUDIENCE:\n{aud_str}")
+    if campaign.pricing_note:
+        product_ctx_lines.append(f"PRICING: {campaign.pricing_note}")
+    rich_product_ctx = "\n\n".join(product_ctx_lines)
+
     return f"""IMPORTANT: This is a pure text generation task. Do NOT use any tools, do NOT search files, do NOT run commands. Just write the content directly.
 
 {_SYSTEM_CONTEXT}
@@ -78,6 +95,8 @@ CAMPAIGN:
 - Install: `{campaign.install_cmd}`
 - Repo: {campaign.repo_url}
 - Site: {campaign.site_url}
+
+{rich_product_ctx}
 
 TARGET PLATFORM: {platform}
 Platform tone: {tone}

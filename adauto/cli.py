@@ -14,10 +14,29 @@ if sys.platform == "win32":
     except AttributeError:
         pass
 
+import os
 import click
 
 from . import __version__
 from .crash import run_cli, guard, log
+
+# ── Credential loader (called before every command) ───────────────────────────
+
+_CRED_FILE = Path.home() / ".adauto" / "credentials.env"
+
+
+def _load_env_from_creds() -> None:
+    """Load ~/.adauto/credentials.env into os.environ (only if not already set)."""
+    if not _CRED_FILE.exists():
+        return
+    for line in _CRED_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip()
+            if k and v and k not in os.environ:
+                os.environ[k] = v
 from .db import (
     init_db, get_stats, get_pending_approval, get_approved,
     approve_post, skip_post, update_post_body,
@@ -31,6 +50,8 @@ from .server import DEFAULT_PORT, DEFAULT_IDLE_TIMEOUT
 def cli():
     """adauto — automated developer marketing with human approval."""
     init_db()
+    # Auto-load platform credentials from ~/.adauto/credentials.env
+    _load_env_from_creds()
 
 
 # ── adauto serve ──────────────────────────────────────────────────────────────
@@ -717,6 +738,115 @@ def demo_list(out_dir):
     for f in files:
         size = f.stat().st_size
         click.echo(f"  {f.name:40s} {size:>8,} bytes")
+
+
+# ── adauto configure ─────────────────────────────────────────────────────────
+
+def _load_creds() -> dict:
+    if not _CRED_FILE.exists():
+        return {}
+    creds = {}
+    for line in _CRED_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            creds[k.strip()] = v.strip()
+    return creds
+
+
+def _save_creds(creds: dict) -> None:
+    _CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# adauto platform credentials — auto-generated, do not commit\n"]
+    for k, v in sorted(creds.items()):
+        lines.append(f"{k}={v}\n")
+    _CRED_FILE.write_text("".join(lines), encoding="utf-8")
+    try:
+        import stat
+        _CRED_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception:
+        pass
+
+
+@cli.command()
+@click.option("--platform", "-p",
+              type=click.Choice(["reddit", "twitter", "devto", "all"], case_sensitive=False),
+              default="all", show_default=True,
+              help="Which platform to configure")
+@click.option("--show", is_flag=True, help="Show current credential status (masked)")
+def configure(platform, show):
+    """Set platform API credentials (Reddit, Twitter, dev.to).
+
+    \b
+    Credentials are stored in ~/.adauto/credentials.env (user-only permissions).
+    They are loaded automatically when adauto starts — no manual export needed.
+
+    \b
+    adauto configure              # configure all platforms
+    adauto configure -p reddit    # only Reddit
+    adauto configure --show       # show what's set (masked)
+    """
+    import os
+    _load_env_from_creds()
+    creds = _load_creds()
+
+    if show:
+        keys_by_platform = {
+            "reddit": ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET",
+                       "REDDIT_USERNAME", "REDDIT_PASSWORD", "REDDIT_USER_AGENT"],
+            "twitter": ["TWITTER_API_KEY", "TWITTER_API_SECRET",
+                        "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_SECRET",
+                        "TWITTER_BEARER_TOKEN"],
+            "devto": ["DEVTO_API_KEY"],
+        }
+        click.echo("\n=== adauto credentials ===")
+        for pname, keys in keys_by_platform.items():
+            click.echo(f"\n[{pname}]")
+            for k in keys:
+                val = creds.get(k) or os.environ.get(k, "")
+                if val:
+                    masked = val[:4] + "****" if len(val) > 4 else "****"
+                    click.echo(f"  {k:<32} = {masked}  [SET]")
+                else:
+                    click.echo(f"  {k:<32} = (not set)")
+        click.echo()
+        return
+
+    platforms_to_configure = (
+        ["reddit", "twitter", "devto"] if platform == "all" else [platform]
+    )
+
+    updated = {}
+
+    for pname in platforms_to_configure:
+        click.echo(f"\n--- {pname.upper()} ---")
+
+        if pname == "reddit":
+            click.echo("Get credentials at: https://www.reddit.com/prefs/apps")
+            click.echo("Create a 'script' type app. Use your Reddit username/password.\n")
+            updated["REDDIT_CLIENT_ID"]     = click.prompt("REDDIT_CLIENT_ID    ", default=creds.get("REDDIT_CLIENT_ID", ""))
+            updated["REDDIT_CLIENT_SECRET"] = click.prompt("REDDIT_CLIENT_SECRET", default=creds.get("REDDIT_CLIENT_SECRET", ""), hide_input=True)
+            updated["REDDIT_USERNAME"]      = click.prompt("REDDIT_USERNAME     ", default=creds.get("REDDIT_USERNAME", ""))
+            updated["REDDIT_PASSWORD"]      = click.prompt("REDDIT_PASSWORD     ", default=creds.get("REDDIT_PASSWORD", ""), hide_input=True)
+            updated["REDDIT_USER_AGENT"]    = click.prompt("REDDIT_USER_AGENT   ", default=creds.get("REDDIT_USER_AGENT", f"adauto/{__version__} by your-reddit-username"))
+
+        elif pname == "twitter":
+            click.echo("Get credentials at: https://developer.twitter.com/en/portal/apps")
+            click.echo("Needs 'Read and Write' permissions.\n")
+            updated["TWITTER_API_KEY"]        = click.prompt("TWITTER_API_KEY       ", default=creds.get("TWITTER_API_KEY", ""))
+            updated["TWITTER_API_SECRET"]     = click.prompt("TWITTER_API_SECRET    ", default=creds.get("TWITTER_API_SECRET", ""), hide_input=True)
+            updated["TWITTER_ACCESS_TOKEN"]   = click.prompt("TWITTER_ACCESS_TOKEN  ", default=creds.get("TWITTER_ACCESS_TOKEN", ""))
+            updated["TWITTER_ACCESS_SECRET"]  = click.prompt("TWITTER_ACCESS_SECRET ", default=creds.get("TWITTER_ACCESS_SECRET", ""), hide_input=True)
+            updated["TWITTER_BEARER_TOKEN"]   = click.prompt("TWITTER_BEARER_TOKEN  ", default=creds.get("TWITTER_BEARER_TOKEN", ""), hide_input=True)
+
+        elif pname == "devto":
+            click.echo("Get API key at: https://dev.to/settings/extensions → DEV Community API Keys\n")
+            updated["DEVTO_API_KEY"] = click.prompt("DEVTO_API_KEY", default=creds.get("DEVTO_API_KEY", ""), hide_input=True)
+
+    # Merge with existing
+    creds.update({k: v for k, v in updated.items() if v.strip()})
+    _save_creds(creds)
+    click.echo(f"\n[ok] Credentials saved to {_CRED_FILE}")
+    click.echo("     Run `adauto configure --show` to verify.\n")
 
 
 # ── adauto license ────────────────────────────────────────────────────────────

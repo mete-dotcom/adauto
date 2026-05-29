@@ -22,7 +22,7 @@ class Platform:
 @dataclass
 class Campaign:
     name: str
-    product: str          # "deepstrain" | "code-atlas"
+    product: str          # "deepstrain" | "code-atlas-py" | "adauto"
     tagline: str
     install_cmd: str      # e.g. "pip install deepstrain"
     repo_url: str
@@ -31,6 +31,12 @@ class Campaign:
     platforms: list = field(default_factory=list)  # list[Platform]
     enabled: bool = True
     demo_cmd: str = ""    # command used in VHS demo tapes
+    # Rich product context — fed directly into generator prompts
+    product_description: str = ""
+    key_features: list = field(default_factory=list)
+    differentiators: list = field(default_factory=list)
+    target_audience: list = field(default_factory=list)
+    pricing_note: str = ""
 
     @classmethod
     def from_toml(cls, path: Path) -> "Campaign":
@@ -46,17 +52,23 @@ class Campaign:
                 posts_per_day=pcfg.get("posts_per_day", 1.0),
                 cooldown_hours=pcfg.get("cooldown_hours", 24),
             ))
+        c = data["campaign"]
         return cls(
-            name=data["campaign"]["name"],
-            product=data["campaign"]["product"],
-            tagline=data["campaign"]["tagline"],
-            install_cmd=data["campaign"]["install_cmd"],
-            repo_url=data["campaign"]["repo_url"],
-            site_url=data["campaign"]["site_url"],
-            deepstrain_url=data["campaign"].get("deepstrain_url", "http://localhost:8765"),
+            name=c["name"],
+            product=c["product"],
+            tagline=c["tagline"],
+            install_cmd=c["install_cmd"],
+            repo_url=c["repo_url"],
+            site_url=c["site_url"],
+            deepstrain_url=c.get("deepstrain_url", "http://localhost:8765"),
             platforms=platforms,
-            enabled=data["campaign"].get("enabled", True),
-            demo_cmd=data["campaign"].get("demo_cmd", ""),
+            enabled=c.get("enabled", True),
+            demo_cmd=c.get("demo_cmd", ""),
+            product_description=c.get("product_description", "").strip(),
+            key_features=c.get("key_features", []),
+            differentiators=c.get("differentiators", []),
+            target_audience=c.get("target_audience", []),
+            pricing_note=c.get("pricing_note", ""),
         )
 
     def get_platform(self, name: str) -> Optional[Platform]:
