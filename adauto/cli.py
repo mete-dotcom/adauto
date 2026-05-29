@@ -524,6 +524,36 @@ def run(campaign, platform, ds_url, dry_run, once):
     click.echo(f"\n{count} post(s) queued. Run `adauto review` to approve before posting.")
 
 
+# ── adauto report ─────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("campaign_name", required=False, default=None)
+def report(campaign_name):
+    """Show ROI report: cost-per-score, best strategy, total spend.
+
+    \b
+    adauto report              # all campaigns
+    adauto report deepstrain   # single campaign
+    """
+    from .server import _tool_report
+    import json as _json
+    results = _tool_report({"campaign": campaign_name} if campaign_name else {})
+    if isinstance(results, list):
+        if not results:
+            click.echo("No data yet. Run `adauto generate` then `adauto post` first.")
+            return
+        for r in results:
+            click.echo(f"\n[{r.get('campaign','?')}]")
+            click.echo(f"  posts          : {r.get('total_posts', 0)}")
+            click.echo(f"  engagement     : {r.get('total_engagement_score', 0):.0f}")
+            click.echo(f"  cost USD       : ${r.get('estimated_total_cost_usd', 0):.4f}")
+            cps = r.get('cost_per_score_point', 0)
+            click.echo(f"  cost/score     : ${cps:.5f}" if cps else "  cost/score     : n/a")
+            click.echo(f"  best strategy  : {r.get('best_strategy', 'insufficient_data')}")
+    else:
+        click.echo(_json.dumps(results, indent=2, ensure_ascii=False))
+
+
 # ── adauto check-engagement ───────────────────────────────────────────────────
 
 @cli.command("check-engagement")
