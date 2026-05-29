@@ -136,6 +136,50 @@ def campaigns():
         click.echo(f"  {status}  {n:20s}  [{plats}]")
 
 
+# ── adauto init-from-repo (point adauto at YOUR repo) ────────────────────────
+
+@cli.command("init-from-repo")
+@click.argument("path", default=".")
+@click.option("--name", default=None, help="Override campaign name")
+@click.option("--ds-url", default="http://localhost:8765", help="deepstrain URL for enrichment")
+@click.option("--no-llm", is_flag=True, default=False, help="Deterministic only — skip LLM enrichment")
+@click.option("--force", is_flag=True, default=False, help="Overwrite existing campaign")
+def init_from_repo(path, name, ds_url, no_llm, force):
+    """Point adauto at YOUR repo -> auto-generate a marketing campaign.
+
+    \b
+    adauto init-from-repo .                 # current repo
+    adauto init-from-repo ~/code/myproject  # any local repo
+    adauto init-from-repo . --no-llm        # deterministic, offline
+
+    Reads README + manifest (pyproject / package.json / Cargo) to build a
+    campaign. If deepstrain is reachable it also sharpens tagline, features
+    and target subreddits. Works either way — the brain is optional.
+    """
+    from .repo_intake import build_campaign
+    from .config import CAMPAIGNS_DIR
+
+    try:
+        meta, toml_text = build_campaign(path, ds_url=ds_url, use_llm=not no_llm)
+    except ValueError as e:
+        click.echo(f"[error] {e}", err=True); sys.exit(1)
+
+    cname = (name or meta["name"]).strip()
+    CAMPAIGNS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = CAMPAIGNS_DIR / f"{cname}.toml"
+    if dest.exists() and not force:
+        click.echo(f"[exists] {dest} — use --force to overwrite", err=True); sys.exit(1)
+    dest.write_text(toml_text, encoding="utf-8")
+
+    brain = "deepstrain-enriched" if meta.get("_enriched") else "deterministic (no LLM)"
+    click.echo(f"[ok] campaign '{cname}' created  ({brain})")
+    click.echo(f"     product    : {meta['product']}")
+    click.echo(f"     tagline    : {meta['tagline']}")
+    click.echo(f"     subreddits : {', '.join(meta.get('subreddits', [])[:6])}")
+    click.echo(f"     file       : {dest}")
+    click.echo(f"\n  Next: adauto generate {cname}  ->  adauto review  ->  adauto post {cname}")
+
+
 # ── adauto generate ───────────────────────────────────────────────────────────
 
 @cli.command()
