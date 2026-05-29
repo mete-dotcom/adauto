@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from . import __version__
+from .crash import run_cli, guard, log
 from .db import (
     init_db, get_stats, get_pending_approval, get_approved,
     approve_post, skip_post, update_post_body,
@@ -291,14 +292,15 @@ def post(campaign_name, platform, dry_run):
         plat = camp.get_platform(plat_name)
         if not plat:
             continue
-        try:
+        with guard(f"posting to {plat_name}"):
             if plat_name == "reddit":
                 from .platforms.reddit import RedditPoster
                 poster = RedditPoster()
                 for p in posts:
                     subs = plat.subreddits or ["programming"]
-                    url = poster.post(camp, plat, p, subreddit=subs[0])
-                    click.echo(f"  #{p['id']} → {url or 'FAILED'}")
+                    with guard(f"reddit post #{p['id']}"):
+                        url = poster.post(camp, plat, p, subreddit=subs[0])
+                        click.echo(f"  #{p['id']} → {url or 'FAILED'}")
             elif plat_name == "devto":
                 from .platforms.devto import DevtoPoster
                 poster = DevtoPoster()
@@ -307,8 +309,6 @@ def post(campaign_name, platform, dry_run):
                 from .platforms.twitter import TwitterPoster
                 poster = TwitterPoster()
                 poster.run_campaign(camp, posts)
-        except RuntimeError as e:
-            click.echo(f"  [{plat_name}] skipped — {e}")
 
         record_run(campaign_name, plat_name)
 
@@ -656,7 +656,8 @@ def license_status():
 
 
 def main():
-    cli()
+    """Entry point — wraps cli() with a top-level crash guard."""
+    run_cli(cli)
 
 
 if __name__ == "__main__":

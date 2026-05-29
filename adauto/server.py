@@ -14,6 +14,7 @@ import time as _time
 import uuid as _uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from .crash import write_crash_report, friendly_message, log
 from .db import (
     init_db, get_stats, get_pending_approval, get_approved,
     approve_post, skip_post, add_post,
@@ -333,6 +334,17 @@ class AdautoHandler(BaseHTTPRequestHandler):
     # ── GET ──────────────────────────────────────────────────────────────────
 
     def do_GET(self):
+        try:
+            self._do_GET_inner()
+        except Exception as exc:
+            write_crash_report(exc, context=f"GET {self.path}")
+            log.error("GET %s unhandled: %s", self.path, exc)
+            try:
+                self._json(500, {"error": friendly_message(exc)})
+            except Exception:
+                pass
+
+    def _do_GET_inner(self):
         self._touch()
 
         if self.path in ("/", ""):
@@ -385,6 +397,17 @@ class AdautoHandler(BaseHTTPRequestHandler):
     # ── POST ─────────────────────────────────────────────────────────────────
 
     def do_POST(self):
+        try:
+            self._do_POST_inner()
+        except Exception as exc:
+            write_crash_report(exc, context=f"POST {self.path}")
+            log.error("POST %s unhandled: %s", self.path, exc)
+            try:
+                self._json(500, {"error": friendly_message(exc)})
+            except Exception:
+                pass
+
+    def _do_POST_inner(self):
         self._touch()
         body = self._body()
 
@@ -395,8 +418,17 @@ class AdautoHandler(BaseHTTPRequestHandler):
             if not fn:
                 return self._json(400, {"error": f"unknown tool: {tool}",
                                         "available": list(TOOLS.keys())})
-            result = fn(args)
-            self._json(200, {"tool": tool, "result": result})
+            try:
+                result = fn(args)
+                self._json(200, {"tool": tool, "result": result})
+            except Exception as exc:
+                crash_path = write_crash_report(exc, context=f"tool:{tool}")
+                log.error("/exec %s failed: %s", tool, exc)
+                self._json(500, {
+                    "error": friendly_message(exc),
+                    "tool":  tool,
+                    "crash": str(crash_path),
+                })
 
         elif self.path == "/eval":
             prompt   = body.get("prompt", "")

@@ -5,6 +5,7 @@ import requests
 from typing import Optional
 
 from .config import Campaign, Platform
+from .crash import retry, log, guard
 
 # Default deepstrain URL (can be overridden per campaign)
 DEFAULT_DS_URL = "http://localhost:8765"
@@ -77,34 +78,42 @@ Write ONE post for this platform. Return a JSON object with these keys:
 Return ONLY the JSON, no explanation."""
 
 
+@retry(max=3, delay=3.0, backoff=2.0, label="deepstrain /eval")
+def _call_deepstrain(ds_url: str, payload: dict) -> dict:
+    """POST to deepstrain /eval with retry on transient network errors."""
+    resp = requests.post(f"{ds_url}/eval", json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def generate_post(campaign: Campaign, platform: str, post_type: str,
                   extra_context: str = "", ds_url: str = None,
                   max_turns: int = 6) -> Optional[dict]:
     """
     Generate a platform-ready post via deepstrain /eval.
     Returns dict with title, body, tags or None on failure.
+    Retries up to 3× on network errors before giving up.
     """
     ds_url = ds_url or campaign.deepstrain_url or DEFAULT_DS_URL
     prompt = _build_prompt(campaign, platform, post_type, extra_context)
 
     try:
-        resp = requests.post(
-            f"{ds_url}/eval",
-            json={
+        data = _call_deepstrain(
+            ds_url,
+            {
                 "prompt": prompt,
                 "plan_first": False,   # content gen = single turn, no plan needed
                 "max_turns": max_turns,
             },
-            timeout=120,
         )
-        resp.raise_for_status()
-        data = resp.json()
     except Exception as e:
-        print(f"[generator] deepstrain /eval failed: {e}")
+        log.error("[generator] deepstrain /eval failed after retries: %s", e)
+        print(f"[generator] deepstrain unreachable — is `deepstrain serve` running on {ds_url}?")
         return None
 
     # Check for hard errors
     if "error" in data and not data.get("answer"):
+        log.warning("[generator] deepstrain error: %s", data["error"])
         print(f"[generator] deepstrain error: {data['error']}")
         return None
 
