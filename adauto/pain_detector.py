@@ -235,6 +235,74 @@ adauto post <name>          # only then does anything post
 Free tier: 1 campaign, 3 posts/day. What did you build?\
 """,
     ),
+
+    # ── Claude / GPT token limit hit — 5-hour wait ────────────────────────────
+    (
+        "llm_token_limit",
+        "deepstrain",
+        [
+            r"\b(claude|chatgpt|gpt.?4|gpt.?o|gemini|copilot)\b.{0,40}\b(limit|quota|cap|reset|out of|hit the|exceeded|waiting)\b",
+            r"\b(token|usage|rate).{0,20}\b(limit|reset|exceed|cap|hit)\b.{0,30}\b(claude|gpt|chatgpt|ai|llm)\b",
+            r"\b(wait(ing)?|resett?ing).{0,30}\b(claude|gpt|quota|token|limit|5 hour|5h|reset)\b",
+            r"\bclaude.{0,30}(not (working|available|responding)|down|slow|offline)\b",
+            r"\b(alternative|alternatives|replacement|instead of|without limit)\b.{0,30}\b(claude|chatgpt|gpt|copilot|ai|llm)\b",
+            r"\b(claude|chatgpt|gpt).{0,20}(alternative|replacement|substitute|without (limit|quota))\b",
+            r"\b(5 hour|5h|several hours?).{0,20}(wait|reset|before|until)\b",
+            r"\b(lost.{0,20}context|context.{0,20}reset|session.{0,20}expired)\b.{0,30}\b(claude|gpt|ai|llm)\b",
+        ],
+        "Cloud LLM token limit hit, waiting for reset or seeking alternative",
+        "deepstrain works locally with Ollama — same tools, no wait, no quota",
+        """\
+If you're hitting Claude's (or any cloud LLM's) session limit, the reset \
+wait is frustrating — especially mid-task when you have context loaded.
+
+**deepstrain** runs fully local with your own key (DeepSeek API, ~$0.009/task) \
+or with a local model via Ollama — no session limits, no 5-hour waits, \
+your data never leaves your machine.
+
+```bash
+pip install deepstrain
+deepstrain    # first run: guided setup, get a free DeepSeek key
+```
+
+If you already have Ollama: `set DEEPSTRAIN_BASE_URL=http://localhost:11434/v1` \
+and it uses your local model instead — zero API cost, zero wait.
+
+What were you working on when the limit hit?\
+""",
+    ),
+
+    # ── Context window full / lost conversation ───────────────────────────────
+    (
+        "context_window_full",
+        "deepstrain",
+        [
+            r"\b(context|window|conversation).{0,30}\b(full|too long|limit|maxed|reset|cleared|lost)\b",
+            r"\b(lost|losing).{0,20}\b(context|conversation|chat history|progress)\b",
+            r"\b(conversation|chat|session).{0,20}\b(too long|too large|maxed out|hit limit)\b",
+            r"\b(compac|summarize|compress).{0,20}(context|conversation|chat)\b",
+            r"\bcontext.{0,10}(window|limit).{0,20}(coding|project|codebase|files)\b",
+        ],
+        "Context window too small for the codebase / lost conversation",
+        "atlas pack_context sends the right 1400 tokens, not 50k raw files",
+        """\
+Context window limits hit hardest when the codebase is large — the LLM \
+keeps forgetting what it saw 10 messages ago.
+
+Two things that help:
+
+1. **atlas** (`pip install atlas-intel`) — `atlas context "your task"` \
+builds a compressed context pack: callers, callees, risk signals, \
+~1400 tokens instead of dumping 50k lines of code. The LLM gets \
+exactly what it needs for the task.
+
+2. **deepstrain** (`pip install deepstrain`) — runs agent loops locally \
+with your own key. Each tool call is fresh context, not accumulated \
+conversation history, so it doesn't balloon the way chat sessions do.
+
+How large is your codebase? That might help narrow down which fits better.\
+""",
+    ),
 ]
 
 
