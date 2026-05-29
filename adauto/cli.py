@@ -175,64 +175,146 @@ def generate(campaign_name, platform, count, post_type, ds_url):
 def review(campaign, platform, approve_all):
     """Review pending posts and approve/skip each one before posting.
 
-    This is the mandatory approval step — nothing posts without your OK.
+    Every post is shown in full — title, body, ethics status.
+    Nothing is published without your explicit approval.
     """
+    import json as _json
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
+        from rich.rule import Rule
+        _console = Console()
+        _USE_RICH = True
+    except ImportError:
+        _USE_RICH = False
+        _console = None
+
+    def _print(msg, style=""):
+        if _USE_RICH:
+            _console.print(msg, style=style)
+        else:
+            click.echo(msg)
+
     posts = get_pending_approval(campaign_name=campaign, platform=platform)
     if not posts:
-        click.echo("No posts pending approval.")
+        _print("\n  No posts pending approval.\n", style="dim")
         return
 
-    click.echo(f"\n{'='*60}")
-    click.echo(f"  {len(posts)} post(s) pending approval")
-    click.echo(f"{'='*60}\n")
+    _print(f"\n  {len(posts)} post(s) waiting for your review\n", style="bold")
 
     if approve_all:
         for p in posts:
+            # Ethics Layer 2: re-check before bulk approve
+            try:
+                from .ethics import check as ec
+                r = ec(p.get("title",""), p.get("body",""), p["campaign_name"], p["platform"])
+                if not r.allowed:
+                    _print(f"  [BLOCKED] #{p['id']} — ethics violation, skipping:", style="red")
+                    for v in r.violations:
+                        _print(f"    {v}", style="red")
+                    skip_post(p["id"])
+                    continue
+            except Exception:
+                pass
             approve_post(p["id"])
-        click.echo(f"✓ Approved all {len(posts)} posts.")
-        click.echo("Run `adauto post` to publish approved posts.")
+        _print(f"  Approved all {len(posts)} posts.", style="green")
+        _print("  Run `adauto post` to publish.\n")
         return
 
     approved_count = 0
     skipped_count  = 0
 
     for i, p in enumerate(posts, 1):
-        click.echo(f"[{i}/{len(posts)}] Campaign: {p['campaign_name']}  Platform: {p['platform']}  Type: {p['post_type']}")
-        click.echo(f"ID: #{p['id']}")
-        if p.get("title"):
-            click.echo(f"\nTITLE:\n{p['title']}")
-        click.echo(f"\nBODY ({len(p.get('body',''))} chars):")
-        click.echo("─" * 50)
-        body = p.get("body", "")
-        # Show first 800 chars
-        click.echo(body[:800])
-        if len(body) > 800:
-            click.echo(f"\n... [{len(body)-800} more chars hidden]")
-        click.echo("─" * 50)
+        body  = p.get("body", "")
+        title = p.get("title", "")
 
+        # Parse ethics notes stored in DB
+        eth_status = p.get("ethics_status", "ok")
+        eth_notes: list = []
+        try:
+            raw = p.get("ethics_notes")
+            if raw:
+                eth_notes = _json.loads(raw)
+        except Exception:
+            pass
+
+        if _USE_RICH:
+            _console.print(Rule(
+                f"[bold]Post #{p['id']}  [{i}/{len(posts)}][/bold]  "
+                f"{p['campaign_name']} / {p['platform']} / {p['post_type']}"
+            ))
+
+            # Ethics status badge
+            if eth_status == "warn":
+                _console.print(Panel(
+                    "\n".join(f"[yellow]⚠  {v}[/yellow]" for v in eth_notes),
+                    title="[yellow]Ethics Warning[/yellow]",
+                    border_style="yellow",
+                ))
+            elif eth_status == "block":
+                _console.print(Panel(
+                    "\n".join(f"[red]{v}[/red]" for v in eth_notes),
+                    title="[red bold]Ethics BLOCK — approve anyway?[/red bold]",
+                    border_style="red",
+                ))
+
+            # Title
+            if title:
+                _console.print(f"\n[bold cyan]TITLE:[/bold cyan] {title}")
+
+            # Body — show FULL content, always
+            _console.print(Panel(
+                body if body else "[dim](no body)[/dim]",
+                title=f"[bold]BODY  ({len(body)} chars)[/bold]",
+                border_style="blue",
+                padding=(1, 2),
+            ))
+        else:
+            click.echo(f"\n[{i}/{len(posts)}] #{p['id']}  "
+                       f"{p['campaign_name']}/{p['platform']}/{p['post_type']}")
+            if eth_status == "warn":
+                click.echo(f"  [ETHICS WARNING] {' | '.join(eth_notes)}")
+            if title:
+                click.echo(f"\nTITLE: {title}")
+            click.echo(f"\nBODY ({len(body)} chars):\n{'─'*50}")
+            click.echo(body)
+            click.echo("─"*50)
+
+        # Approval prompt
         while True:
             choice = click.prompt(
-                "\n[a]pprove  [s]kip  [e]dit  [v]iew full  [q]uit review",
+                "\n[a]pprove  [s]kip  [e]dit body  [q]uit",
                 default="a",
             ).strip().lower()
 
-            if choice in ("a", "approve"):
+            if choice in ("a", "approve", ""):
+                # Ethics Layer 2: final check before approve
+                try:
+                    from .ethics import check as ec
+                    r = ec(title, body, p["campaign_name"], p["platform"])
+                    if not r.allowed:
+                        _print(f"  Ethics BLOCK — cannot approve:", style="red bold")
+                        for v in r.violations:
+                            _print(f"    {v}", style="red")
+                        _print("  Edit the content first or skip this post.", style="yellow")
+                        continue
+                except Exception:
+                    pass
                 approve_post(p["id"])
-                click.echo("✓ Approved")
+                _print("  Approved.", style="green bold")
                 approved_count += 1
                 break
+
             elif choice in ("s", "skip"):
                 skip_post(p["id"])
-                click.echo("✗ Skipped")
+                _print("  Skipped.", style="dim")
                 skipped_count += 1
                 break
-            elif choice in ("v", "view"):
-                click.echo("\n" + "="*60)
-                click.echo(body)
-                click.echo("="*60)
+
             elif choice in ("e", "edit"):
-                new_title = click.prompt("New title (enter to keep)", default=p.get("title",""))
-                click.echo("Paste new body (end with a line containing only '---'):")
+                new_title = click.prompt("New title (enter to keep)", default=title)
+                click.echo("Paste new body (end line with '---' alone to finish):")
                 lines = []
                 while True:
                     ln = input()
@@ -242,22 +324,23 @@ def review(campaign, platform, approve_all):
                 new_body = "\n".join(lines) if lines else body
                 update_post_body(p["id"], new_title, new_body)
                 approve_post(p["id"])
-                click.echo("✓ Edited + Approved")
+                _print("  Edited and approved.", style="green bold")
                 approved_count += 1
                 break
+
             elif choice in ("q", "quit"):
-                click.echo(f"\nReview paused. {approved_count} approved, {skipped_count} skipped.")
+                _print(f"\n  Review paused — {approved_count} approved, {skipped_count} skipped.")
                 return
             else:
-                click.echo("Invalid choice. Use a/s/e/v/q")
+                click.echo("  Use a / s / e / q")
 
         click.echo()
 
-    click.echo(f"\n{'='*60}")
-    click.echo(f"Review complete: {approved_count} approved, {skipped_count} skipped")
+    if _USE_RICH:
+        _console.print(Rule())
+    _print(f"  Review complete: {approved_count} approved, {skipped_count} skipped")
     if approved_count > 0:
-        click.echo("Run `adauto post` to publish approved posts.")
-    click.echo("="*60)
+        _print("  Run `adauto post <campaign>` to publish approved posts.", style="bold")
 
 
 # ── adauto post ───────────────────────────────────────────────────────────────
@@ -654,6 +737,31 @@ def license_activate(key):
         click.echo(f"✓ {result['message']}")
     else:
         click.echo(f"✗ {result['message']}", err=True)
+        sys.exit(1)
+
+
+@license.command("recover")
+@click.option("--key",     required=True, help='Recovery token (starts with "RK1-AA-")')
+@click.option("--email",   required=True, help="The email address on your receipt")
+@click.option("--sale-id", required=True, help="Paddle order/subscription ID from your receipt")
+def license_recover(key, email, sale_id):
+    """Manual activation using a one-time recovery key from support.
+
+    \b
+    Use this when adauto license activate fails even though you paid.
+    Contact support to get a recovery key, then run:
+
+      adauto license recover \\
+        --key "RK1-AA-..." \\
+        --email you@example.com \\
+        --sale-id sub_xxxxx
+    """
+    from .license import activate_recovery
+    result = activate_recovery(token=key, email=email, sale_id=sale_id)
+    if result["ok"]:
+        click.echo(f"[ok] {result['message']}")
+    else:
+        click.echo(f"[error] {result['message']}", err=True)
         sys.exit(1)
 
 

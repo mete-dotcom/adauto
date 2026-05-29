@@ -478,13 +478,46 @@ class AdautoHandler(BaseHTTPRequestHandler):
         elif self.path == "/approve":
             post_id  = body.get("post_id")
             campaign = body.get("campaign")
+            # Ethics Layer 3 — final gate before approval
+            from .ethics import check as ethics_check
+
+            def _ethics_ok(p: dict) -> tuple[bool, list[str]]:
+                try:
+                    r = ethics_check(p.get("title",""), p.get("body",""),
+                                     p.get("campaign_name",""), p.get("platform",""))
+                    return r.allowed, r.violations
+                except Exception:
+                    return True, []
+
             if post_id:
+                pending_one = get_pending_approval()
+                post = next((p for p in pending_one if p["id"] == int(post_id)), None)
+                if post:
+                    ok, violations = _ethics_ok(post)
+                    if not ok:
+                        return self._json(403, {
+                            "error": "ethics_block",
+                            "violations": violations,
+                            "message": "Post blocked by ethics filter. Edit content before approving.",
+                        })
                 approve_post(int(post_id))
                 return self._json(200, {"ok": True, "post_id": post_id})
+
             pending = get_pending_approval(campaign_name=campaign)
+            approved_ids, blocked = [], []
             for p in pending:
-                approve_post(p["id"])
-            self._json(200, {"ok": True, "approved": len(pending)})
+                ok, violations = _ethics_ok(p)
+                if ok:
+                    approve_post(p["id"])
+                    approved_ids.append(p["id"])
+                else:
+                    blocked.append({"post_id": p["id"], "violations": violations})
+            self._json(200, {
+                "ok": True,
+                "approved": len(approved_ids),
+                "blocked":  len(blocked),
+                "blocked_posts": blocked,
+            })
 
         elif self.path == "/skip":
             pid = body.get("post_id")

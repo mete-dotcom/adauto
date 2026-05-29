@@ -12,8 +12,9 @@ from typing import Optional
 
 from .licensing_core import is_valid_format, tier_from_key, FREE_TIER_CAMPAIGNS, FREE_TIER_POSTS_PER_DAY
 
-LICENSE_FILE    = Path.home() / ".adauto" / "license.json"
-VERIFY_ENDPOINT = "https://awesome-deepseek-agent-main.vercel.app/api/verify"
+LICENSE_FILE          = Path.home() / ".adauto" / "license.json"
+VERIFY_ENDPOINT       = "https://awesome-deepseek-agent-main.vercel.app/api/verify"
+RECOVERY_ENDPOINT     = "https://awesome-deepseek-agent-main.vercel.app/api/adauto/redeem-recovery-key"
 
 
 def _load() -> dict:
@@ -115,3 +116,59 @@ def check_limit(campaign_count: int) -> Optional[str]:
 def get_key() -> Optional[str]:
     data = _load()
     return data.get("key") if data else None
+
+
+def activate_recovery(token: str, email: str, sale_id: str) -> dict:
+    """
+    Activate via a one-time recovery key (issued by admin after payment verify).
+
+    Calls POST /api/adauto/redeem-recovery-key — the server validates the
+    HMAC-signed token, marks it consumed, and returns the license payload.
+
+    Returns {"ok": bool, "tier": str, "message": str}
+    """
+    token   = token.strip()
+    email   = email.strip().lower()
+    sale_id = sale_id.strip()
+
+    if not token.startswith("RK1-AA-"):
+        return {
+            "ok": False,
+            "message": 'Invalid recovery key format. adauto keys start with "RK1-AA-".',
+        }
+
+    try:
+        import httpx
+        resp = httpx.post(
+            RECOVERY_ENDPOINT,
+            json={"token": token, "email": email, "sale_id": sale_id},
+            timeout=15,
+        )
+        data = resp.json()
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"Could not reach activation server: {e}\n"
+                       "Check your internet connection and try again.",
+        }
+
+    if resp.status_code == 409:
+        return {"ok": False, "message": "This recovery key has already been used."}
+    if resp.status_code == 410:
+        return {"ok": False, "message": "Recovery key has expired (24h window). Request a new one."}
+    if not data.get("success"):
+        return {"ok": False, "message": data.get("error", "Server rejected recovery key.")}
+
+    lic = data.get("license", {})
+    tier = data.get("tier", lic.get("tier", "pro"))
+    license_data = {
+        "key":         token,  # use recovery token as identifier
+        "tier":        tier,
+        "activated":   time.time(),
+        "last_check":  time.time(),
+        "recovery":    True,
+        "email":       email,
+        "server":      lic,
+    }
+    _save(license_data)
+    return {"ok": True, "tier": tier, "message": f"Recovery activation successful ({tier} tier)"}

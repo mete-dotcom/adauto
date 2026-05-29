@@ -1,11 +1,21 @@
 """Content generator — uses deepstrain /eval to write platform-ready posts."""
 import json
 import time
-import requests
+import logging
 from typing import Optional
 
+import httpx
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
+
 from .config import Campaign, Platform
-from .crash import retry, log, guard
+
+log = logging.getLogger("adauto.generator")
 
 # Default deepstrain URL (can be overridden per campaign)
 DEFAULT_DS_URL = "http://localhost:8765"
@@ -88,12 +98,19 @@ Write ONE post for this platform. Return a JSON object with these keys:
 Return ONLY the JSON, no explanation."""
 
 
-@retry(max=3, delay=3.0, backoff=2.0, label="deepstrain /eval")
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=3, max=30),
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError)),
+    before_sleep=before_sleep_log(log, logging.WARNING),
+    reraise=True,
+)
 def _call_deepstrain(ds_url: str, payload: dict) -> dict:
-    """POST to deepstrain /eval with retry on transient network errors."""
-    resp = requests.post(f"{ds_url}/eval", json=payload, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+    """POST to deepstrain /eval with tenacity retry on transient errors."""
+    with httpx.Client(timeout=120) as client:
+        resp = client.post(f"{ds_url}/eval", json=payload)
+        resp.raise_for_status()
+        return resp.json()
 
 
 def generate_post(campaign: Campaign, platform: str, post_type: str,
@@ -122,9 +139,13 @@ def generate_post(campaign: Campaign, platform: str, post_type: str,
                 "max_turns": max_turns,
             },
         )
-    except Exception as e:
-        log.error("[generator] deepstrain /eval failed after retries: %s", e)
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        log.error("deepstrain unreachable after retries: %s", e)
         print(f"[generator] deepstrain unreachable — is `deepstrain serve` running on {ds_url}?")
+        return None
+    except Exception as e:
+        log.error("deepstrain /eval failed: %s", e)
+        print(f"[generator] deepstrain error: {e}")
         return None
 
     # Check for hard errors

@@ -1,40 +1,130 @@
 name: Publish to PyPI
 
+# Triggered on version tags: v0.2.0, v1.0.0, etc.
+# Builds closed-source Nuitka binary wheels for each platform
+# + a source sdist fallback (no .py source files shipped in binary wheels)
+
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  id-token: write   # OIDC Trusted Publishing — no API tokens needed
+  id-token: write   # OIDC Trusted Publishing
 
 jobs:
-  build-and-publish:
-    runs-on: ubuntu-latest
-    environment: pypi
+  # ── Step 1: Build Nuitka binary wheels per platform ──────────────────────────
+  build-nuitka:
+    name: Nuitka wheel (${{ matrix.os }} / Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.11"
+          - os: windows-latest
+            python: "3.12"
+          - os: macos-latest
+            python: "3.11"
+          - os: macos-latest
+            python: "3.12"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install Nuitka + build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka ordered-set zstandard wheel setuptools build
+
+      - name: Install adauto dependencies (for Nuitka to resolve imports)
+        run: pip install -e ".[dev]"
+
+      - name: Compile adauto with Nuitka
+        run: |
+          python -m nuitka \
+            --module \
+            --include-package=adauto \
+            --include-package-data=adauto \
+            --no-pyi-file \
+            --output-dir=nuitka_out \
+            adauto/__init__.py
+
+      - name: Build Nuitka binary wheel
+        run: python .github/scripts/build_nuitka_wheel.py
+
+      - name: Verify wheel
+        run: |
+          pip install twine
+          twine check dist/*.whl
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-py${{ matrix.python }}
+          path: dist/*.whl
+
+  # ── Step 2: Build source sdist (fallback for platforms without binary wheel) ─
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install build tools
-        run: python -m pip install --upgrade pip build
-
-      - name: Build wheel + sdist
-        run: python -m build
-
-      - name: Verify dist
+      - name: Build sdist only
         run: |
+          pip install build
+          python -m build --sdist
+
+      - name: Verify sdist
+        run: |
+          pip install twine
+          twine check dist/*.tar.gz
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  # ── Step 3: Publish all artifacts to PyPI ────────────────────────────────────
+  publish:
+    name: Publish to PyPI
+    needs: [build-nuitka, build-sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist_all
+          merge-multiple: true
+
+      - name: Collect dist files
+        run: |
+          mkdir -p dist
+          find dist_all -name "*.whl" -o -name "*.tar.gz" | xargs -I{} cp {} dist/
           ls -lh dist/
-          python -m pip install twine
-          python -m twine check dist/*
 
       - name: Publish to PyPI (OIDC)
         uses: pypa/gh-action-pypi-publish@release/v1
-        # No api_token — uses OIDC Trusted Publishing
-        # Configure at: https://pypi.org/manage/project/adauto/settings/publishing/
-        # Workflow: publish.yml  |  Environment: pypi  |  Tag: v*
+        with:
+          packages-dir: dist/
+          # Configure Trusted Publisher at:
+          # https://pypi.org/manage/project/adauto/settings/publishing/
+          # Workflow: publish.yml | Environment: pypi | Tag: v*

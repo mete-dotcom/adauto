@@ -4,21 +4,30 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "adauto"
-version = "0.1.0"
-description = "Multi-platform developer marketing automation — Reddit, dev.to, Twitter"
+version = "0.2.0"
+description = "Developer marketing automation — pulse scanning, ethics filter, multi-platform posting"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "Proprietary"}
 requires-python = ">=3.11"
 dependencies = [
+    # CLI
     "click>=8.1",
-    "requests>=2.31",
-    "tomllib; python_version < '3.11'",
+    # Beautiful terminal output (review UI, tables, panels)
+    "rich>=13.7",
+    # HTTP — better error messages, connection pooling, timeouts
+    "httpx>=0.27",
+    # Retry logic — battle-tested exponential backoff
+    "tenacity>=8.2",
+    # Reddit API (optional but recommended for richer pulse data)
     "praw>=7.7",
+    # Twitter/X API
     "tweepy>=4.14",
+    # requests — kept for compatibility with pulse.py RSS fetching
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff"]
+dev  = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.9"]
 
 [project.scripts]
 adauto = "adauto.cli:main"
@@ -30,3 +39,7 @@ include = ["adauto*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]

@@ -1,10 +1,18 @@
-"""SQLite state store for adauto — posts, campaigns, engagement."""
+"""SQLite state store for adauto — posts, campaigns, engagement.
+
+Ethics gate lives here (Layer 1 of 3).
+Every post passes through ethics.check() before being written to the DB.
+A blocked post is never stored — it is rejected at the source.
+A warned post is stored with ethics_status='warn' so the user sees it in review.
+"""
 import sqlite3
 import json
 from pathlib import Path
 from datetime import datetime, timezone
+import logging
 
 DB_PATH = Path.home() / ".adauto" / "adauto.db"
+log = logging.getLogger("adauto.db")
 
 
 def get_conn() -> sqlite3.Connection:
@@ -35,6 +43,8 @@ def init_db() -> None:
             body          TEXT,
             url           TEXT,           -- posted URL / thread URL
             status        TEXT DEFAULT 'pending_approval',  -- pending_approval | approved | queued | posted | failed | skipped
+            ethics_status TEXT DEFAULT 'ok',                -- ok | warn | block (block = never reaches DB)
+            ethics_notes  TEXT,                             -- JSON list of violation strings
             scheduled_at  TEXT,
             posted_at     TEXT,
             error         TEXT,
@@ -76,11 +86,57 @@ def kv_get(key: str, default=None):
 
 def add_post(campaign_name: str, platform: str, post_type: str,
              title: str, body: str, scheduled_at: str = None) -> int:
+    """
+    Insert a new post into the DB.
+
+    ETHICS GATE (Layer 1 of 3):
+      - BLOCK: post is rejected; raises ValueError with violation details.
+      - WARN:  post is stored with ethics_status='warn'; shown prominently in review.
+      - OK:    post is stored normally.
+    """
+    # ── Ethics check ──────────────────────────────────────────────────────────
+    eth_status = "ok"
+    eth_notes: list[str] = []
+    try:
+        from .ethics import check as ethics_check
+        result = ethics_check(
+            title=title or "",
+            body=body or "",
+            campaign_name=campaign_name,
+            platform=platform,
+        )
+        if not result.allowed:
+            # Hard block — never write to DB
+            msg = "; ".join(result.violations)
+            log.warning("add_post BLOCKED [%s/%s]: %s", campaign_name, platform, msg)
+            raise ValueError(
+                f"Post blocked by ethics filter ({campaign_name}/{platform}):\n"
+                + "\n".join(f"  {v}" for v in result.violations)
+            )
+        if result.severity == "warn":
+            eth_status = "warn"
+            eth_notes  = result.violations
+    except ValueError:
+        raise
+    except Exception as e:
+        log.warning("ethics check error in add_post (allowing): %s", e)
+
+    # ── Insert ────────────────────────────────────────────────────────────────
     with get_conn() as conn:
+        # Migrate: add columns if they don't exist yet (idempotent)
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(posts)").fetchall()}
+        if "ethics_status" not in existing:
+            conn.execute("ALTER TABLE posts ADD COLUMN ethics_status TEXT DEFAULT 'ok'")
+        if "ethics_notes" not in existing:
+            conn.execute("ALTER TABLE posts ADD COLUMN ethics_notes TEXT")
+
         cur = conn.execute(
-            """INSERT INTO posts (campaign_name, platform, post_type, title, body, scheduled_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (campaign_name, platform, post_type, title, body, scheduled_at)
+            """INSERT INTO posts
+               (campaign_name, platform, post_type, title, body, scheduled_at,
+                ethics_status, ethics_notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (campaign_name, platform, post_type, title, body, scheduled_at,
+             eth_status, json.dumps(eth_notes) if eth_notes else None)
         )
         return cur.lastrowid
 
