@@ -37,17 +37,26 @@ _POST_TYPE_INSTRUCTIONS = {
 
 
 def _build_prompt(campaign: Campaign, platform: str, post_type: str,
-                  extra_context: str = "") -> str:
+                  extra_context: str = "", subreddit: str = "") -> str:
     tone = _PLATFORM_TONES.get(platform, "Professional and technical.")
     ptype_instr = _POST_TYPE_INSTRUCTIONS.get(post_type, "Write a relevant post about the tool.")
 
-    # Adaptive learning: inject what's worked before
+    # Layer 1: our own engagement history (what worked in past posts)
     learning_ctx = ""
     try:
         from .analytics import build_learning_context
         learning_ctx = build_learning_context(campaign.name, platform, post_type)
     except Exception:
         pass
+
+    # Layer 2: community pulse (what's working in the community right now)
+    pulse_ctx = ""
+    if platform == "reddit" and subreddit:
+        try:
+            from .pulse import build_pulse_context
+            pulse_ctx = build_pulse_context(subreddit, post_type, campaign.product)
+        except Exception:
+            pass
 
     return f"""IMPORTANT: This is a pure text generation task. Do NOT use any tools, do NOT search files, do NOT run commands. Just write the content directly.
 
@@ -67,6 +76,7 @@ POST TYPE: {post_type}
 Instructions: {ptype_instr}
 
 {f'EXTRA CONTEXT: {extra_context}' if extra_context else ''}
+{pulse_ctx}
 {learning_ctx}
 
 Write ONE post for this platform. Return a JSON object with these keys:
@@ -88,14 +98,20 @@ def _call_deepstrain(ds_url: str, payload: dict) -> dict:
 
 def generate_post(campaign: Campaign, platform: str, post_type: str,
                   extra_context: str = "", ds_url: str = None,
-                  max_turns: int = 6) -> Optional[dict]:
+                  max_turns: int = 6, subreddit: str = "") -> Optional[dict]:
     """
     Generate a platform-ready post via deepstrain /eval.
-    Returns dict with title, body, tags or None on failure.
+
+    Pipeline:
+      1. Community pulse scan (if reddit) → injects live community signal
+      2. deepstrain /eval → generates post (with retry)
+      3. Ethics check → blocks if policy violations found
+      4. Return post dict or None on failure/block
+
     Retries up to 3× on network errors before giving up.
     """
     ds_url = ds_url or campaign.deepstrain_url or DEFAULT_DS_URL
-    prompt = _build_prompt(campaign, platform, post_type, extra_context)
+    prompt = _build_prompt(campaign, platform, post_type, extra_context, subreddit=subreddit)
 
     try:
         data = _call_deepstrain(
@@ -211,26 +227,71 @@ def generate_post(campaign: Campaign, platform: str, post_type: str,
     post.setdefault("body", "")
     post.setdefault("tags", [])
     post.setdefault("estimated_chars", len(post.get("body", "")))
+
+    # Ethics gate — block policy violations before they reach the queue
+    try:
+        from .ethics import check as ethics_check, explain
+        eth = ethics_check(
+            title=post.get("title") or "",
+            body=post.get("body") or "",
+            campaign_name=campaign.name,
+            platform=platform,
+        )
+        if not eth.allowed:
+            print(f"[generator] post BLOCKED by ethics filter:")
+            for v in eth.violations:
+                print(f"  {v}")
+            print("  Regenerate with a different angle or review campaign config.")
+            return None
+        if eth.severity == "warn":
+            print(f"[generator] ethics WARNING — review before posting:")
+            for v in eth.violations:
+                print(f"  {v}")
+            post["_ethics_warnings"] = eth.violations
+    except Exception as e:
+        log.warning("[generator] ethics check failed (allowing): %s", e)
+
     return post
 
 
 def generate_batch(campaign: Campaign, platform_name: str, count: int = 3,
-                   post_types: list = None, ds_url: str = None) -> list[dict]:
-    """Generate `count` posts for a platform, cycling through post_types."""
+                   post_types: list = None, ds_url: str = None,
+                   subreddits: list = None) -> list[dict]:
+    """
+    Generate `count` posts for a platform, cycling through post_types.
+    For Reddit, scans each subreddit's pulse before generating.
+    Posts that fail ethics check are skipped (not added to results).
+    """
     plat = campaign.get_platform(platform_name)
     if not plat:
         print(f"[generator] platform {platform_name!r} not found in campaign")
         return []
 
     types = post_types or plat.post_types or ["showcase"]
+    subs  = subreddits or plat.subreddits or ["programming"]  # Reddit subreddits
+
+    # Pre-scan pulse for Reddit (one scan per unique subreddit, cached)
+    if platform_name == "reddit" and subs:
+        print(f"[generator] scanning community pulse for {len(subs)} subreddit(s)...")
+        try:
+            from .pulse import pulse_summary
+            summary = pulse_summary(subs[:5])  # limit to 5 for speed
+            print(summary)
+        except Exception:
+            pass
+
     results = []
     for i in range(count):
-        ptype = types[i % len(types)]
-        print(f"[generator] generating {platform_name}/{ptype} ({i+1}/{count})...")
-        post = generate_post(campaign, platform_name, ptype, ds_url=ds_url)
+        ptype  = types[i % len(types)]
+        sub    = subs[i % len(subs)] if subs else ""
+        label  = f"r/{sub}" if sub and platform_name == "reddit" else platform_name
+        print(f"[generator] {label}/{ptype} ({i+1}/{count})...")
+        post = generate_post(campaign, platform_name, ptype, ds_url=ds_url, subreddit=sub)
         if post:
             post["post_type"] = ptype
-            post["platform"] = platform_name
+            post["platform"]  = platform_name
+            if sub:
+                post["subreddit"] = sub
             results.append(post)
-        time.sleep(1)  # small rate limit between calls
+        time.sleep(1)  # rate-limit between calls
     return results
