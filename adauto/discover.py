@@ -31,7 +31,10 @@ def start_beacon(port: int = DEFAULT_PORT) -> Optional[object]:
 
     infos = []
     zc = Zeroconf()
-    for name in (primary, secondary):
+    # server= is the hostname A-record that actually resolves. It must be
+    # "adauto.local." (the product), not the device hostname — otherwise typing
+    # http://adauto.local:<port> from another device fails to connect.
+    for label, name in (("adauto", primary), (f"adauto-{hostname}", secondary)):
         info = ServiceInfo(
             SERVICE_TYPE,
             name,
@@ -41,7 +44,7 @@ def start_beacon(port: int = DEFAULT_PORT) -> Optional[object]:
                 b"version": b"0.1.0",
                 b"product": b"adauto",
             },
-            server=f"{hostname}.local.",
+            server=f"{label}.local.",
         )
         try:
             zc.register_service(info)
