@@ -6,6 +6,14 @@ import sys
 import time
 from pathlib import Path
 
+# Windows: reconfigure stdout/stderr to UTF-8 so Unicode symbols render correctly
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
 import click
 
 from . import __version__
@@ -411,9 +419,9 @@ def status():
         return
 
     if pending:
-        click.echo(f"\n⏳ {len(pending)} post(s) PENDING APPROVAL — run `adauto review`")
+        click.echo(f"\n[pending] {len(pending)} post(s) PENDING APPROVAL — run `adauto review`")
     if approved:
-        click.echo(f"✅ {len(approved)} post(s) APPROVED, ready to publish — run `adauto post <campaign>`")
+        click.echo(f"[ready]   {len(approved)} post(s) APPROVED, ready to publish — run `adauto post <campaign>`")
 
     if stats:
         click.echo()
