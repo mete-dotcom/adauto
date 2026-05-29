@@ -51,6 +51,7 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Compile adauto with Nuitka
+        shell: bash
         run: |
           python -m nuitka \
             --module \
@@ -58,7 +59,7 @@ jobs:
             --include-package-data=adauto \
             --no-pyi-file \
             --output-dir=nuitka_out \
-            adauto/__init__.py
+            adauto
 
       - name: Build Nuitka binary wheel
         run: python .github/scripts/build_nuitka_wheel.py
