@@ -213,6 +213,15 @@ def _tool_post(args: dict) -> dict:
                 TwitterPoster().run_campaign(camp, posts)
                 published.extend({"post_id": p["id"], "platform": "twitter"} for p in posts)
 
+            elif plat_name == "hackernews":
+                from .platforms.hackernews import HackerNewsPoster
+                HackerNewsPoster().run_campaign(camp, posts)
+                # HN = draft only, mark as "draft_printed" not "published"
+                published.extend({
+                    "post_id": p["id"], "platform": "hackernews",
+                    "status": "draft_printed — submit manually at https://news.ycombinator.com/submit",
+                } for p in posts)
+
             record_run(campaign_name, plat_name)
 
         except RuntimeError as e:

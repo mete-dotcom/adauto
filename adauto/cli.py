@@ -309,6 +309,12 @@ def post(campaign_name, platform, dry_run):
                 from .platforms.twitter import TwitterPoster
                 poster = TwitterPoster()
                 poster.run_campaign(camp, posts)
+            elif plat_name == "hackernews":
+                from .platforms.hackernews import HackerNewsPoster
+                poster = HackerNewsPoster()
+                poster.run_campaign(camp, posts)
+            else:
+                click.echo(f"  [{plat_name}] no poster configured — skipping")
 
         record_run(campaign_name, plat_name)
 

@@ -30,6 +30,7 @@ class Campaign:
     deepstrain_url: str = "http://localhost:8765"
     platforms: list = field(default_factory=list)  # list[Platform]
     enabled: bool = True
+    demo_cmd: str = ""    # command used in VHS demo tapes
 
     @classmethod
     def from_toml(cls, path: Path) -> "Campaign":
@@ -55,6 +56,7 @@ class Campaign:
             deepstrain_url=data["campaign"].get("deepstrain_url", "http://localhost:8765"),
             platforms=platforms,
             enabled=data["campaign"].get("enabled", True),
+            demo_cmd=data["campaign"].get("demo_cmd", ""),
         )
 
     def get_platform(self, name: str) -> Optional[Platform]:
