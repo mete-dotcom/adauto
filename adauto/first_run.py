@@ -8,8 +8,8 @@ from pathlib import Path
 
 TOS_VERSION  = "1.0"
 _TOS_FILE    = Path.home() / ".adauto" / "accepted_tos"
-_TOS_URL     = "https://adauto.massiron.com/terms"
-_RECOVER_URL = "https://adauto.massiron.com/recover"
+_TOS_URL     = "https://massiron.com/terms"
+_RECOVER_URL = "https://massiron.com/adauto"
 
 TOS_TEXT = f"""
 ┌─────────────────────────────────────────────────────────┐
