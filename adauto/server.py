@@ -21,6 +21,7 @@ from .db import (
 )
 from .config import list_campaigns, load_campaign
 from . import __version__
+from . import cognition_envelope as _env
 
 DEFAULT_PORT         = 8766
 DEFAULT_IDLE_TIMEOUT = 1800
@@ -49,6 +50,95 @@ TOOLS = {
         "args": {"campaign": "string (optional — all if omitted)"},
     },
 }
+
+# ── Web dashboard (human control center) ──────────────────────────────────────
+
+_UI_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>adauto · Control Center</title>
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--fg:#e6edf3;--dim:#8b949e;--border:#30363d;
+        --green:#3fb950;--red:#f85149;--magenta:#bc8cff;--blue:#1f6feb;}
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,Consolas,monospace;margin:0;padding:26px;max-width:980px}
+  h1{font-size:20px;margin:0} .sub{color:var(--dim);margin:2px 0 18px}
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+  select,input{background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font:13px ui-monospace,monospace}
+  button{background:var(--blue);color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;font:13px ui-monospace,monospace}
+  button:hover{background:#388bfd} button.ghost{background:var(--bg2);border:1px solid var(--border);color:var(--fg)}
+  button.ok{background:#238636} button.warn{background:#9e6a03}
+  .cards{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+  .stat{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 18px;min-width:130px}
+  .stat .n{font-size:26px;font-weight:700} .stat .l{color:var(--dim);font-size:11px;text-transform:uppercase}
+  h2{font-size:14px;color:var(--dim);margin:20px 0 10px}
+  .post{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+  .post .meta{color:var(--dim);font-size:12px;margin-bottom:6px}
+  .post .body{white-space:pre-wrap;word-break:break-word;margin-bottom:8px}
+  .muted{color:var(--dim);font-size:12px}
+  pre.out{background:#010409;border:1px solid var(--border);border-radius:6px;padding:9px;white-space:pre-wrap;font-size:12px;max-height:240px;overflow:auto}
+</style></head><body>
+  <h1>adauto · Control Center</h1>
+  <div class="sub">Run campaigns, review &amp; approve posts, see results — nothing posts without your click.</div>
+
+  <div class="cards" id="stats"></div>
+
+  <div class="toolbar">
+    <select id="campaign"></select>
+    <button onclick="run()">▶ Run campaign</button>
+    <button class="ghost" onclick="report()">Report</button>
+    <button class="ghost" onclick="refresh()">↻ Refresh</button>
+  </div>
+
+  <h2>Pending approval</h2>
+  <div id="pending"><div class="muted">loading…</div></div>
+  <pre class="out" id="out" hidden></pre>
+
+<script>
+function el(i){return document.getElementById(i);}
+async function exec(tool,args){const r=await fetch('/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool:tool,args:args||{}})});return r.json();}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+async function refresh(){
+  const h=await (await fetch('/health')).json();
+  el('stats').innerHTML =
+    `<div class="stat"><div class="n" style="color:var(--magenta)">${(h.tier||'free').toUpperCase()}</div><div class="l">tier · active</div></div>`+
+    `<div class="stat"><div class="n">${h.pending}</div><div class="l">pending</div></div>`+
+    `<div class="stat"><div class="n" style="color:var(--green)">${h.approved}</div><div class="l">approved</div></div>`;
+  const p=await (await fetch('/api/pending')).json();
+  const sel=el('campaign');
+  if(!sel.dataset.filled){ sel.innerHTML=(p.campaigns||[]).map(c=>`<option>${esc(c)}</option>`).join('')||'<option>(no campaigns)</option>'; sel.dataset.filled='1'; }
+  const posts=p.pending||[];
+  el('pending').innerHTML = posts.length ? posts.map(renderPost).join('') :
+    '<div class="muted">Nothing pending. Run a campaign to generate posts.</div>';
+}
+function renderPost(p){
+  const id=p.id??p.post_id??'?';
+  const camp=p.campaign||p.campaign_name||'';
+  const body=p.body||p.text||p.content||p.message||JSON.stringify(p);
+  const plat=p.platform||p.platform_name||'';
+  return `<div class="post" id="p${id}">
+    <div class="meta">#${esc(id)} · ${esc(camp)} ${plat?('· '+esc(plat)):''}</div>
+    <div class="body">${esc(body)}</div>
+    <button class="ok" onclick="approve(${JSON.stringify(id)})">✓ Approve</button>
+    <button class="warn" onclick="skip(${JSON.stringify(id)})">Skip</button>
+  </div>`;
+}
+async function run(){const c=el('campaign').value; show('Running '+c+'…'); const r=await exec('run',{campaign:c}); show(JSON.stringify(r.result||r,null,2)); refresh();}
+async function approve(id){const r=await exec('approve',{post_id:id}); show(JSON.stringify(r.result||r,null,2)); refresh();}
+async function skip(id){const el2=document.getElementById('p'+id); if(el2)el2.style.opacity=.4; show('Skipped #'+id); }
+async function report(){const c=el('campaign').value; const r=await exec('report',{campaign:c}); show(JSON.stringify(r.result||r,null,2));}
+function show(t){const o=el('out'); o.hidden=false; o.textContent=t;}
+function checkTos(){
+  if(localStorage.getItem('adauto_tos_v1'))return;
+  const d=document.createElement('div');
+  d.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px 22px;max-width:460px;z-index:999;font-size:13px;line-height:1.5;box-shadow:0 4px 24px #000a';
+  d.innerHTML='<b style="color:#e6edf3">Terms of Use</b><br><span style="color:#8b949e">You are responsible for content you publish. <a href="https://adauto.massiron.com/terms" target="_blank" style="color:#bc8cff">Full terms</a></span><br><br><button onclick="localStorage.setItem(\'adauto_tos_v1\',\'1\');this.closest(\'div\').remove()" style="background:#3fb950;color:#0d1117;border:0;border-radius:6px;padding:6px 18px;cursor:pointer;font-weight:600;margin-right:8px">I agree</button>';
+  document.body.appendChild(d);
+}
+refresh(); setInterval(refresh, 8000); checkTos();
+</script>
+</body></html>"""
+
 
 # ── Tool implementations ──────────────────────────────────────────────────────
 
@@ -387,9 +477,14 @@ class AdautoHandler(BaseHTTPRequestHandler):
             })
 
         elif self.path == "/health":
+            try:
+                tier = _env.current_tier()
+            except Exception:
+                tier = "free"
             self._json(200, {
                 "status":  "ok",
                 "version": __version__,
+                "tier":    tier,
                 "pending": len(get_pending_approval()),
                 "approved": len(get_approved()),
             })
@@ -399,6 +494,28 @@ class AdautoHandler(BaseHTTPRequestHandler):
                 {"name": k, "description": v["description"], "args": v["args"]}
                 for k, v in TOOLS.items()
             ]})
+
+        elif self.path in ("/ui", "/ui/"):
+            body = _UI_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif self.path == "/api/pending":
+            rows = get_pending_approval()
+            out = []
+            for r in rows:
+                if isinstance(r, dict):
+                    out.append(r)
+                else:
+                    try:
+                        out.append(dict(r))
+                    except Exception:
+                        out.append({"raw": str(r)})
+            self._json(200, {"pending": out, "campaigns": list_campaigns()})
 
         else:
             self._json(404, {"error": "not found"})
@@ -429,7 +546,8 @@ class AdautoHandler(BaseHTTPRequestHandler):
                                         "available": list(TOOLS.keys())})
             try:
                 result = fn(args)
-                self._json(200, {"tool": tool, "result": result})
+                ctx = args.get("campaign") or args.get("prompt")
+                self._json(200, {"tool": tool, "result": result, **_env.fields(tool, ctx)})
             except Exception as exc:
                 crash_path = write_crash_report(exc, context=f"tool:{tool}")
                 log.error("/exec %s failed: %s", tool, exc)

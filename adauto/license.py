@@ -13,8 +13,8 @@ from typing import Optional
 from .licensing_core import is_valid_format, tier_from_key, FREE_TIER_CAMPAIGNS, FREE_TIER_POSTS_PER_DAY
 
 LICENSE_FILE          = Path.home() / ".adauto" / "license.json"
-VERIFY_ENDPOINT       = "https://awesome-deepseek-agent-main.vercel.app/api/verify"
-RECOVERY_ENDPOINT     = "https://awesome-deepseek-agent-main.vercel.app/api/adauto/redeem-recovery-key"
+VERIFY_ENDPOINT       = "https://adauto.massiron.com/api/verify"
+RECOVERY_ENDPOINT     = "https://adauto.massiron.com/api/adauto/redeem-recovery-key"
 
 
 def _load() -> dict:

@@ -49,6 +49,8 @@ from .server import DEFAULT_PORT, DEFAULT_IDLE_TIMEOUT
 @click.version_option(__version__)
 def cli():
     """adauto — automated developer marketing with human approval."""
+    from .first_run import ensure_tos
+    ensure_tos()
     init_db()
     # Auto-load platform credentials from ~/.adauto/credentials.env
     _load_env_from_creds()
@@ -134,6 +136,45 @@ def campaigns():
         status = "✓" if (camp and camp.enabled) else "✗"
         plats  = ", ".join(p.name for p in camp.platforms) if camp else "?"
         click.echo(f"  {status}  {n:20s}  [{plats}]")
+
+
+@cli.command()
+def recover():
+    """Lost your license key? Get recovery instructions."""
+    from .first_run import print_recovery_hint
+    print_recovery_hint()
+
+
+@cli.command("mcp-panel")
+@click.option("--json", "json_out", is_flag=True, default=False, help="Emit machine-readable JSON")
+def mcp_panel(json_out):
+    """Serving management panel — tier, tools, approval gate, LAN, envelope."""
+    from . import mcp_panel as _panel
+
+    if json_out:
+        import json as _json
+
+        click.echo(_json.dumps(_panel.gather(), indent=2, default=str))
+    else:
+        _panel.render()
+
+
+@cli.command()
+@click.option("--port", "-p", default=8766, show_default=True)
+@click.option("--no-browser", is_flag=True, default=False, help="Do not open the browser")
+def gui(port, no_browser):
+    """Open the adauto control center in your browser — run, review, approve, report."""
+    import threading
+    import webbrowser
+
+    from .server import run_server
+
+    url = f"http://127.0.0.1:{port}/ui"
+    click.echo(f"[adauto] Control center: {url}")
+    click.echo("[adauto] Nothing posts without your approval. Ctrl+C to stop.")
+    if not no_browser:
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    run_server(port=port)
 
 
 # ── adauto init-from-repo (point adauto at YOUR repo) ────────────────────────

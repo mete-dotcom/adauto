@@ -133,8 +133,8 @@ def add_post(campaign_name: str, platform: str, post_type: str,
         cur = conn.execute(
             """INSERT INTO posts
                (campaign_name, platform, post_type, title, body, scheduled_at,
-                ethics_status, ethics_notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                status, ethics_status, ethics_notes)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?)""",
             (campaign_name, platform, post_type, title, body, scheduled_at,
              eth_status, json.dumps(eth_notes) if eth_notes else None)
         )

@@ -55,11 +55,16 @@ class Rule:
 
     def matches(self, text: str) -> bool:
         t = text.lower()
-        if any(kw.lower() in t for kw in self.keywords):
-            return True
+        for kw in self.keywords:
+            if kw.lower() in t:
+                log.debug("ethics [%s] keyword hit: %r", self.category, kw)
+                return True
         for pat in self.patterns:
             try:
-                if re.search(pat, t, re.IGNORECASE | re.DOTALL):
+                m = re.search(pat, t, re.IGNORECASE | re.DOTALL)
+                if m:
+                    log.debug("ethics [%s] pattern hit: %r → %r",
+                              self.category, pat, m.group(0)[:80])
                     return True
             except re.error:
                 pass
@@ -180,16 +185,22 @@ _BUILTIN_RULES: list[Rule] = [
     ),
 
     # ── Fake reviews & paid endorsements ─────────────────────────────────────
+    # NOTE: Keep patterns NARROW — "write reviews", "positive experience", "authentic"
+    # are all legitimate and must NOT match. Only match clearly fraudulent intents.
     Rule(
         category="fake_reviews",
         severity="block",
         description="Soliciting or offering fake/paid reviews",
         patterns=[
-            r"\b(buy|paid|get|write|leave).{0,20}\b(fake|5.?star|positive)\b.{0,20}\breview\b",
-            r"\b(review.{0,10}exchange|review.{0,10}swap|review.{0,10}incentiv)\b",
-            r"\bpay.{0,15}\breview\b|\breview.{0,15}\bpay\b",
+            # "buy fake reviews", "get 5-star reviews for payment" etc.
+            r"\b(buy|purchase|order)\s+.{0,15}\b(fake|fabricated|false)\b.{0,15}\breview",
+            r"\b(pay|paying|paid)\s+.{0,10}(for\s+)?(fake|5[\s-]?star|positive)\s+review",
+            # explicit exchange schemes
+            r"\breview\s+(exchange|swap|for\s+review|4\s+review)\b",
+            r"\bi\s+will\s+(review|upvote).{0,20}if\s+you\s+(review|upvote)\b",
         ],
-        keywords=["paid review", "fake review", "buy reviews", "review exchange"],
+        keywords=["paid review", "fake review", "buy reviews", "review exchange",
+                  "review swap", "review4review", "r4r reviews"],
     ),
 
     # ── Pyramid / MLM schemes ─────────────────────────────────────────────────
